@@ -1,0 +1,16 @@
+{
+  "name": "status-bot-web",
+  "version": "1.0.0",
+  "private": true,
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@neoxr/baileys": "latest",
+    "express": "^4.19.2",
+    "multer": "^1.4.5-lts.1",
+    "pino": "^9.5.0",
+    "ws": "^8.18.0"
+  }
+}

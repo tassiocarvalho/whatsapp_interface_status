@@ -1,0 +1,669 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Status Bot</title>
+<style>
+  :root{
+    --bg:#0b141a; --panel:#111b21; --header:#202c33; --field:#2a3942;
+    --bubble:#005c4b; --green:#00a884; --green-dark:#008069;
+    --txt:#e9edef; --txt2:#8696a0; --icon:#aebac1; --div:#222d34;
+    --danger:#f15c6d;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  html,body{margin:0; height:100%;}
+  body{
+    font-family:'Segoe UI',system-ui,-apple-system,Roboto,Helvetica,Arial,sans-serif;
+    background:#000; color:var(--txt);
+    display:flex; justify-content:center;
+  }
+  #app{
+    width:100%; max-width:460px; height:100dvh; background:var(--bg);
+    position:relative; overflow:hidden; display:flex; flex-direction:column;
+    box-shadow:0 0 40px rgba(0,0,0,.6);
+  }
+
+  .screen{
+    position:absolute; inset:0; display:flex; flex-direction:column;
+    background:var(--bg); transform:translateX(100%);
+    transition:transform .28s cubic-bezier(.2,.8,.2,1); z-index:1;
+  }
+  .screen.active{transform:translateX(0); z-index:2;}
+  .screen.behind{transform:translateX(-22%); z-index:0;}
+
+  .topbar{
+    background:var(--header); min-height:60px; display:flex; align-items:center;
+    gap:14px; padding:10px 16px; padding-top:calc(10px + env(safe-area-inset-top));
+    flex-shrink:0;
+  }
+  .topbar .icon-btn{color:var(--icon);}
+  .topbar .title{font-size:19px; font-weight:600; line-height:1.1;}
+  .topbar .sub{font-size:12.5px; color:var(--txt2);}
+  .grow{flex:1; min-width:0;}
+  .icon-btn{
+    background:none; border:none; padding:8px; margin:-8px; cursor:pointer;
+    color:var(--icon); display:inline-flex; border-radius:50%;
+  }
+  .icon-btn:active{background:rgba(255,255,255,.08);}
+  svg{display:block;}
+
+  .scroll{flex:1; overflow-y:auto; overscroll-behavior:contain;}
+
+  .avatar{
+    width:46px; height:46px; border-radius:50%; flex-shrink:0;
+    display:flex; align-items:center; justify-content:center;
+    font-weight:600; font-size:16px; color:#0b141a;
+  }
+
+  #connect .body{
+    flex:1; overflow-y:auto; padding:34px 26px;
+    display:flex; flex-direction:column; align-items:center; text-align:center;
+  }
+  .logo-ring{
+    width:96px; height:96px; border-radius:50%;
+    background:linear-gradient(135deg,var(--green),var(--green-dark));
+    display:flex; align-items:center; justify-content:center; margin-bottom:22px;
+    box-shadow:0 8px 28px rgba(0,168,132,.28);
+  }
+  #connect h1{font-size:22px; margin:0 0 6px; font-weight:600;}
+  #connect p.lead{color:var(--txt2); font-size:14px; margin:0 0 30px; max-width:300px; line-height:1.45;}
+  .field-wrap{width:100%; text-align:left; margin-bottom:16px;}
+  .field-wrap label{font-size:12.5px; color:var(--green); display:block; margin:0 0 6px 4px;}
+  .field{
+    width:100%; background:var(--field); border:none; color:var(--txt);
+    font-size:16px; padding:14px 16px; border-radius:12px; outline:none;
+    border:1.5px solid transparent;
+  }
+  .field:focus{border-color:var(--green);}
+  .btn{
+    width:100%; border:none; border-radius:26px; padding:14px; font-size:15.5px;
+    font-weight:600; cursor:pointer; background:var(--green); color:#04231c;
+    display:flex; align-items:center; justify-content:center; gap:8px;
+    transition:filter .15s, opacity .15s;
+  }
+  .btn:active{filter:brightness(.9);}
+  .btn[disabled]{opacity:.55; cursor:default;}
+  .btn.ghost{background:transparent; color:var(--txt2); font-weight:500;}
+
+  .code-box{
+    width:100%; margin-top:8px; background:var(--panel); border:1px solid var(--div);
+    border-radius:16px; padding:22px; animation:pop .3s ease;
+  }
+  .code-box .code{
+    font-size:30px; font-weight:700; letter-spacing:7px; color:var(--txt);
+    font-family:'SF Mono',ui-monospace,Menlo,Consolas,monospace;
+  }
+  .code-box .steps{margin:16px 0 0; text-align:left; color:var(--txt2); font-size:13px; line-height:1.7;}
+  .status-pill{
+    display:inline-flex; align-items:center; gap:8px; margin-top:16px;
+    font-size:13px; color:var(--txt2);
+  }
+  .dot{width:9px; height:9px; border-radius:50%; background:var(--txt2);}
+  .dot.on{background:var(--green); box-shadow:0 0 0 4px rgba(0,168,132,.18);}
+  .dot.wait{background:#e6b34a; animation:blink 1s infinite;}
+  .dot.off{background:var(--danger);}
+
+  .search{padding:8px 12px; background:var(--bg);}
+  .search input{
+    width:100%; background:var(--field); border:none; color:var(--txt);
+    padding:10px 16px; border-radius:20px; font-size:14.5px; outline:none;
+  }
+  .row{
+    display:flex; align-items:center; gap:14px; padding:11px 16px; cursor:pointer;
+    border-bottom:1px solid var(--div);
+  }
+  .row:active{background:var(--panel);}
+  .row .name{font-size:16.5px; color:var(--txt); font-weight:400;}
+  .row .desc{font-size:13.5px; color:var(--txt2); margin-top:3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+  .row .meta{flex:1; min-width:0;}
+
+  #compose .scroll{padding:16px; display:flex; flex-direction:column; gap:16px;}
+  .drop{
+    border:2px dashed #2f3d45; border-radius:16px; min-height:230px;
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    gap:12px; color:var(--txt2); cursor:pointer; text-align:center; padding:20px;
+    background:var(--panel);
+  }
+  .drop:active{border-color:var(--green);}
+  .drop strong{color:var(--txt); font-weight:600; font-size:15px;}
+  .drop span{font-size:13px;}
+  .preview{position:relative; border-radius:16px; overflow:hidden; background:#000;}
+  .preview img,.preview video{width:100%; display:block; max-height:340px; object-fit:contain;}
+  .preview .swap{
+    position:absolute; top:10px; right:10px; background:rgba(0,0,0,.6);
+    color:#fff; border:none; border-radius:18px; padding:7px 14px; font-size:12.5px;
+    cursor:pointer; display:flex; align-items:center; gap:6px;
+  }
+  .preview .badge{
+    position:absolute; bottom:10px; left:10px; background:rgba(0,0,0,.6);
+    color:#fff; border-radius:6px; padding:4px 9px; font-size:11.5px; letter-spacing:.3px;
+  }
+
+  .cap-wrap{display:flex; align-items:flex-end; gap:10px; background:var(--field); border-radius:22px; padding:6px 8px 6px 16px;}
+  .cap-wrap textarea{
+    flex:1; background:none; border:none; color:var(--txt); font-size:15px;
+    resize:none; outline:none; max-height:110px; line-height:1.4; padding:8px 0;
+    font-family:inherit;
+  }
+  .cap-wrap textarea::placeholder{color:var(--txt2);}
+  .chip-link{background:none; border:none; color:var(--green); font-size:13px; cursor:pointer; padding:4px 2px; align-self:flex-start;}
+
+  .stepper-row{display:flex; align-items:center; justify-content:space-between; background:var(--panel); border-radius:14px; padding:14px 16px;}
+  .stepper-row .lbl{font-size:15px;}
+  .stepper-row .lbl small{display:block; color:var(--txt2); font-size:12px; margin-top:2px;}
+  .stepper{display:flex; align-items:center; gap:16px;}
+  .stepper button{
+    width:36px; height:36px; border-radius:50%; border:none; background:var(--field);
+    color:var(--txt); font-size:20px; cursor:pointer; display:flex; align-items:center; justify-content:center;
+  }
+  .stepper button:active{background:var(--green); color:#04231c;}
+  .stepper .val{font-size:18px; font-weight:600; min-width:22px; text-align:center;}
+
+  .fab{
+    position:absolute; right:18px; bottom:calc(18px + env(safe-area-inset-bottom));
+    width:60px; height:60px; border-radius:50%; border:none; background:var(--green);
+    color:#04231c; cursor:pointer; display:flex; align-items:center; justify-content:center;
+    box-shadow:0 6px 20px rgba(0,168,132,.4); z-index:5; transition:transform .15s, opacity .2s;
+  }
+  .fab:active{transform:scale(.92);}
+  .fab[disabled]{opacity:.4; cursor:default; box-shadow:none;}
+
+  .backdrop{
+    position:absolute; inset:0; background:rgba(0,0,0,.55); z-index:20;
+    opacity:0; pointer-events:none; transition:opacity .25s;
+  }
+  .backdrop.show{opacity:1; pointer-events:auto;}
+  .sheet{
+    position:absolute; left:0; right:0; bottom:0; background:var(--header);
+    border-radius:20px 20px 0 0; padding:22px 20px calc(22px + env(safe-area-inset-bottom));
+    transform:translateY(100%); transition:transform .3s cubic-bezier(.2,.8,.2,1); z-index:21;
+  }
+  .sheet.show{transform:translateY(0);}
+  .sheet h3{margin:0 0 16px; font-size:17px;}
+  .sum{display:flex; justify-content:space-between; gap:16px; padding:9px 0; border-bottom:1px solid var(--div); font-size:14px;}
+  .sum span:first-child{color:var(--txt2);}
+  .sum span:last-child{text-align:right; max-width:60%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .sheet-actions{display:flex; gap:12px; margin-top:20px;}
+  .sheet-actions .btn{flex:1;}
+
+  .prog-card{
+    position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
+    width:82%; max-width:320px; background:var(--header); border-radius:18px;
+    padding:26px 22px; z-index:22; text-align:center;
+  }
+  .spinner{
+    width:42px; height:42px; margin:0 auto 16px; border-radius:50%;
+    border:3px solid var(--field); border-top-color:var(--green); animation:spin .8s linear infinite;
+  }
+  .prog-card h3{margin:0 0 14px; font-size:16px;}
+  .prog-list{text-align:left; font-size:14px; color:var(--txt2); line-height:1.9; max-height:150px; overflow-y:auto;}
+  .prog-list .ok{color:var(--txt);}
+  .prog-list .warn{color:#e6b34a;}
+
+  .toast{
+    position:absolute; left:50%; bottom:90px; transform:translateX(-50%) translateY(20px);
+    background:#233138; color:var(--txt); padding:12px 20px; border-radius:24px; font-size:14px;
+    z-index:30; opacity:0; transition:.25s; white-space:nowrap; box-shadow:0 4px 16px rgba(0,0,0,.4);
+  }
+  .toast.show{opacity:1; transform:translateX(-50%) translateY(0);}
+
+  .empty{padding:60px 30px; text-align:center; color:var(--txt2); font-size:14px;}
+
+  .btn.danger{background:var(--danger); color:#33070c;}
+  .menu{
+    position:absolute; top:calc(56px + env(safe-area-inset-top)); right:12px;
+    background:var(--header); border-radius:12px; padding:6px; z-index:26;
+    box-shadow:0 8px 26px rgba(0,0,0,.55); opacity:0; transform:scale(.95);
+    transform-origin:top right; pointer-events:none; transition:.12s;
+  }
+  .menu.show{opacity:1; transform:scale(1); pointer-events:auto;}
+  .menu-item{
+    background:none; border:none; color:var(--txt); font-size:14.5px;
+    padding:11px 20px 11px 14px; width:100%; text-align:left; cursor:pointer;
+    border-radius:8px; white-space:nowrap;
+  }
+  .menu-item:active{background:var(--field);}
+  .menu-item.danger{color:var(--danger);}
+  .dialog{
+    position:absolute; left:50%; top:50%; transform:translate(-50%,-46%) scale(.96);
+    width:84%; max-width:330px; background:var(--header); border-radius:18px;
+    padding:24px 22px; z-index:23; opacity:0; pointer-events:none; transition:.2s;
+  }
+  .dialog.show{opacity:1; pointer-events:auto; transform:translate(-50%,-50%) scale(1);}
+  .dialog h3{margin:0 0 10px; font-size:17px;}
+  .dialog p{margin:0 0 22px; color:var(--txt2); font-size:14px; line-height:1.5;}
+  .dlg-actions{display:flex; gap:12px;}
+  .dlg-actions .btn{flex:1;}
+
+  @keyframes spin{to{transform:rotate(360deg);}}
+  @keyframes blink{50%{opacity:.35;}}
+  @keyframes pop{from{transform:scale(.96); opacity:0;} to{transform:scale(1); opacity:1;}}
+  @media (prefers-reduced-motion:reduce){*{transition:none!important; animation:none!important;}}
+</style>
+</head>
+<body>
+<div id="app">
+
+  <section class="screen active" id="connect">
+    <div class="topbar">
+      <div class="grow"><div class="title">Vincular dispositivo</div></div>
+    </div>
+    <div class="body">
+      <div class="logo-ring">
+        <svg width="46" height="46" viewBox="0 0 24 24" fill="#fff"><path d="M12.04 2c-5.46 0-9.9 4.44-9.9 9.9 0 1.75.46 3.45 1.32 4.95L2 22l5.3-1.39c1.45.79 3.08 1.21 4.74 1.21 5.46 0 9.9-4.44 9.9-9.9S17.5 2 12.04 2m5.8 14.02c-.24.68-1.42 1.3-1.95 1.34-.5.05-1.13.24-3.65-.76-3.07-1.21-5.04-4.34-5.2-4.54s-1.25-1.66-1.25-3.17.79-2.25 1.07-2.56.61-.38.81-.38.4 0 .58.01c.19.01.44-.07.68.52.24.6.83 2.06.9 2.21s.12.32.02.52c-.1.19-.15.31-.29.48s-.31.38-.44.51c-.15.15-.3.31-.13.6.17.29.75 1.24 1.61 2 1.11.99 2.05 1.3 2.34 1.44.29.15.46.12.63-.07.17-.2.72-.85.91-1.14.19-.29.39-.24.65-.15.27.1 1.71.81 2 .96.29.15.49.22.56.34.07.13.07.72-.17 1.4"/></svg>
+      </div>
+      <h1>Conectar WhatsApp</h1>
+      <p class="lead">Digite o número da conta que vai postar os status. Um código de 8 dígitos será gerado.</p>
+
+      <div class="field-wrap">
+        <label>Número com DDI e DDD</label>
+        <input class="field" id="phone" type="tel" inputmode="numeric" placeholder="55 75 99876 8767" autocomplete="off">
+      </div>
+      <button class="btn" id="genBtn">Gerar código</button>
+
+      <div id="codeArea" style="width:100%; display:none;">
+        <div class="code-box">
+          <div class="code" id="pairCode">----&nbsp;----</div>
+          <div class="steps">
+            1. Abra o WhatsApp no celular da conta<br>
+            2. Aparelhos conectados › Conectar aparelho<br>
+            3. Toque em <b>Conectar com número</b> e digite o código
+          </div>
+          <div class="status-pill"><span class="dot wait" id="connDot"></span><span id="connTxt">Aguardando confirmação…</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="screen" id="groups">
+    <div class="topbar">
+      <div class="grow">
+        <div class="title">Status</div>
+        <div class="sub" id="connSub">Conectado · escolha um grupo</div>
+      </div>
+      <button class="icon-btn" id="reloadGroups" title="Recarregar">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M17.65 6.35A8 8 0 1 0 19.73 14h-2.08A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h7V4z"/></svg>
+      </button>
+      <button class="icon-btn" id="menuBtn" title="Menu">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor"><path d="M12 8a2 2 0 1 0 0-4 2 2 0 0 0 0 4m0 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4m0 6a2 2 0 1 0 0 4 2 2 0 0 0 0-4"/></svg>
+      </button>
+    </div>
+    <div class="search"><input id="grpSearch" placeholder="Pesquisar grupo" autocomplete="off"></div>
+    <div class="scroll" id="groupList"></div>
+  </section>
+
+  <section class="screen" id="compose">
+    <div class="topbar">
+      <button class="icon-btn" id="backCompose">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20z"/></svg>
+      </button>
+      <div class="avatar" id="cAvatar" style="width:40px;height:40px;font-size:15px;"></div>
+      <div class="grow">
+        <div class="title" id="cGroupName" style="font-size:16.5px;"></div>
+        <div class="sub">Novo status de grupo</div>
+      </div>
+    </div>
+
+    <div class="scroll">
+      <input type="file" id="fileInput" accept="image/*,video/*" hidden>
+
+      <div class="drop" id="dropZone">
+        <svg width="42" height="42" viewBox="0 0 24 24" fill="var(--green)"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7M9 2 7.17 4H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2h-3.17L15 2zm3 15a5 5 0 1 1 0-10 5 5 0 0 1 0 10"/></svg>
+        <strong>Selecionar mídia</strong>
+        <span>Imagem ou vídeo · toque para escolher</span>
+      </div>
+
+      <div class="cap-wrap" id="capWrap" style="display:none;">
+        <textarea id="caption" rows="1" placeholder="Adicionar legenda…"></textarea>
+      </div>
+      <button class="chip-link" id="savedCap" style="display:none;">Usar legenda salva</button>
+
+      <div class="stepper-row" id="timesRow" style="display:none;">
+        <div class="lbl">Postar quantas vezes<small>Repete o mesmo status em sequência</small></div>
+        <div class="stepper">
+          <button id="minus">−</button>
+          <span class="val" id="timesVal">1</span>
+          <button id="plus">+</button>
+        </div>
+      </div>
+    </div>
+
+    <button class="fab" id="sendFab" disabled>
+      <svg width="26" height="26" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21 23 12 2.01 3 2 10l15 2-15 2z"/></svg>
+    </button>
+  </section>
+
+  <div class="menu" id="mainMenu">
+    <button class="menu-item danger" id="logoutItem">Trocar conta</button>
+  </div>
+
+  <div class="backdrop" id="backdrop"></div>
+
+  <div class="dialog" id="confirmDialog">
+    <h3 id="dlgTitle"></h3>
+    <p id="dlgMsg"></p>
+    <div class="dlg-actions">
+      <button class="btn ghost" id="dlgCancel">Cancelar</button>
+      <button class="btn danger" id="dlgOk">Confirmar</button>
+    </div>
+  </div>
+
+  <div class="sheet" id="confirmSheet">
+    <h3>Confirmar status</h3>
+    <div class="sum"><span>Grupo</span><span id="sGroup"></span></div>
+    <div class="sum"><span>Mídia</span><span id="sMedia"></span></div>
+    <div class="sum"><span>Tipo</span><span id="sType"></span></div>
+    <div class="sum"><span>Vezes</span><span id="sTimes"></span></div>
+    <div class="sum"><span>Legenda</span><span id="sCap"></span></div>
+    <div class="sheet-actions">
+      <button class="btn ghost" id="cancelSend">Cancelar</button>
+      <button class="btn" id="confirmSend">Postar agora</button>
+    </div>
+  </div>
+
+  <div class="prog-card" id="progCard" style="display:none;">
+    <div class="spinner"></div>
+    <h3 id="progTitle">Postando status…</h3>
+    <div class="prog-list" id="progList"></div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const delay = ms => new Promise(r => setTimeout(r, ms));
+
+/* ── camada WebSocket (fala com server.js) ── */
+let ws, connOpen = false;
+const waiters = {};
+let pendingPost = null;
+
+function wsSend(o){ ws && ws.readyState === 1 && ws.send(JSON.stringify(o)); }
+function waitFor(type){ return new Promise(res => { (waiters[type] = waiters[type] || []).push(res); }); }
+function resolveWaiters(type, val){ (waiters[type] || []).splice(0).forEach(f => f(val)); }
+
+function connectWS(){
+  ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host);
+  ws.onmessage = e => { try { route(JSON.parse(e.data)); } catch {} };
+  ws.onclose = () => { updateConnPill('off'); setTimeout(connectWS, 1500); };
+}
+
+function route(m){
+  switch(m.type){
+    case 'status':        handleStatus(m); break;
+    case 'pairingCode':   resolveWaiters('pairing', m.code); break;
+    case 'pairingError':  resolveWaiters('pairing', null); toast('Erro: ' + m.message); break;
+    case 'groups':        resolveWaiters('groups', m.groups); break;
+    case 'savedCaption':  resolveWaiters('caption', m.text); break;
+    case 'progress':      pendingPost && pendingPost.onProgress(m.current, m.total); break;
+    case 'retry':
+    case 'postItemError': pendingPost && pendingPost.onRetry && pendingPost.onRetry(m); break;
+    case 'postDone':      if(pendingPost){ pendingPost.resolve(); pendingPost = null; } break;
+    case 'postError':     if(pendingPost){ pendingPost.reject(new Error(m.message)); pendingPost = null; } toast('Erro: ' + m.message); break;
+    case 'loggedOut':     onLoggedOut(); break;
+    case 'logoutError':   toast(m.message); break;
+  }
+}
+
+function handleStatus(m){
+  if(m.connection === 'open'){
+    connOpen = true;
+    resolveWaiters('open', true);
+    if($('.screen.active')?.id === 'connect') enterGroups();
+  } else if(m.connection === 'loggedOut'){
+    connOpen = false;
+  }
+  updateConnPill(m.connection);
+}
+
+function updateConnPill(conn){
+  const dot = $('#connDot'), txt = $('#connTxt');
+  if(!dot || !txt) return;
+  if(conn === 'open'){ dot.className = 'dot on'; txt.textContent = 'Conectado'; }
+  else if(conn === 'off'){ dot.className = 'dot off'; txt.textContent = 'Servidor offline'; }
+  else if(conn === 'loggedOut'){ dot.className = 'dot off'; txt.textContent = 'Desconectado — gere novo código'; }
+  else { dot.className = 'dot wait'; txt.textContent = 'Aguardando confirmação…'; }
+}
+
+const api = {
+  requestPairingCode(num){ wsSend({ type:'requestPairing', number:num }); return waitFor('pairing'); },
+  waitConnection(){ return connOpen ? Promise.resolve() : waitFor('open'); },
+  fetchGroups(){ wsSend({ type:'fetchGroups' }); return waitFor('groups'); },
+  loadSavedCaption(){ wsSend({ type:'loadSavedCaption' }); return waitFor('caption'); },
+  async postStatus({ file, groupId, caption, times }, onProgress, onRetry){
+    const form = new FormData(); form.append('media', file);
+    const up = await fetch('/upload', { method:'POST', body:form });
+    if(!up.ok) throw new Error('upload falhou');
+    const { uploadId } = await up.json();
+    return new Promise((resolve, reject) => {
+      pendingPost = { onProgress, onRetry, resolve, reject };
+      wsSend({ type:'post', uploadId, groupId, caption, times });
+    });
+  }
+};
+
+/* ── UI ── */
+const state = { group:null, file:null, type:null, times:1 };
+const palette = ['#0a927b','#8b5cf6','#e0803a','#3d7ce0','#c0518f','#5aa02c','#c94f4f','#0f8bb0'];
+const colorFor = s => palette[[...s].reduce((a,c)=>a+c.charCodeAt(0),0)%palette.length];
+const initials = s => s.replace(/[^\p{L}\p{N} ]/gu,'').trim().split(/\s+/).slice(0,2).map(w=>w[0]||'').join('').toUpperCase()||'#';
+
+function go(id){
+  const cur = $('.screen.active');
+  const next = $('#'+id);
+  if(cur===next) return;
+  if(cur){ cur.classList.remove('active'); cur.classList.add('behind'); }
+  next.classList.remove('behind'); next.classList.add('active');
+  setTimeout(()=>cur&&cur.classList.remove('behind'), 300);
+}
+
+let toastT;
+function toast(msg){
+  const t=$('#toast'); t.textContent=msg; t.classList.add('show');
+  clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove('show'),2600);
+}
+
+$('#genBtn').addEventListener('click', async ()=>{
+  const num = $('#phone').value.replace(/\D/g,'');
+  if(num.length < 10){ toast('Número inválido'); return; }
+  const btn=$('#genBtn'); btn.disabled=true; btn.textContent='Gerando…';
+  const code = await api.requestPairingCode(num);
+  btn.disabled=false; btn.textContent='Gerar novo código';
+  if(!code) return;
+  $('#pairCode').textContent = code;
+  $('#codeArea').style.display='block';
+  await api.waitConnection();
+  updateConnPill('open');
+  await delay(500); enterGroups();
+});
+
+async function enterGroups(){
+  go('groups');
+  const list = $('#groupList');
+  list.innerHTML='<div class="empty">Carregando grupos…</div>';
+  renderGroups(await api.fetchGroups());
+  $('#reloadGroups').onclick = async ()=>{
+    list.innerHTML='<div class="empty">Carregando grupos…</div>';
+    renderGroups(await api.fetchGroups());
+  };
+}
+
+let lastGroups = [];
+function renderGroups(groups){
+  lastGroups = groups || [];
+  const q = $('#grpSearch').value.toLowerCase();
+  const list = $('#groupList');
+  const filtered = lastGroups.filter(g=>g.subject.toLowerCase().includes(q));
+  if(!filtered.length){ list.innerHTML='<div class="empty">Nenhum grupo encontrado.</div>'; return; }
+  list.innerHTML='';
+  filtered.forEach(g=>{
+    const row=document.createElement('div'); row.className='row';
+    row.innerHTML=`
+      <div class="avatar" style="background:${colorFor(g.subject)}">${initials(g.subject)}</div>
+      <div class="meta">
+        <div class="name">${g.subject}</div>
+        <div class="desc">${g.size} participantes · toque para postar status</div>
+      </div>`;
+    row.onclick=()=>openCompose(g);
+    list.appendChild(row);
+  });
+}
+$('#grpSearch').oninput = ()=>renderGroups(lastGroups);
+
+function openCompose(g){
+  state.group=g; state.file=null; state.type=null; state.times=1;
+  $('#cGroupName').textContent=g.subject;
+  const av=$('#cAvatar'); av.textContent=initials(g.subject); av.style.background=colorFor(g.subject);
+  resetCompose();
+  go('compose');
+}
+function resetCompose(){
+  $('#dropZone').style.display='flex';
+  $('#capWrap').style.display='none';
+  $('#savedCap').style.display='none';
+  $('#timesRow').style.display='none';
+  $('#caption').value=''; $('#timesVal').textContent='1'; state.times=1;
+  $('#sendFab').disabled=true;
+  const old=$('#previewBox'); if(old) old.remove();
+}
+
+$('#backCompose').onclick=()=>go('groups');
+$('#dropZone').onclick=()=>$('#fileInput').click();
+
+$('#fileInput').onchange=e=>{
+  const f=e.target.files[0]; if(!f) return;
+  state.file=f;
+  state.type = f.type.startsWith('video') ? 'video' : 'imagem';
+  const url=URL.createObjectURL(f);
+  const box=document.createElement('div'); box.className='preview'; box.id='previewBox';
+  box.innerHTML = (state.type==='video'
+      ? `<video src="${url}" muted playsinline controls></video>`
+      : `<img src="${url}">`) +
+    `<div class="badge">${state.type==='video'?'VÍDEO':'IMAGEM'}</div>
+     <button class="swap" id="swapBtn">Trocar</button>`;
+  $('#dropZone').style.display='none';
+  $('#dropZone').after(box);
+  $('#swapBtn').onclick=()=>$('#fileInput').click();
+  $('#capWrap').style.display='flex';
+  $('#savedCap').style.display='block';
+  $('#timesRow').style.display='flex';
+  $('#sendFab').disabled=false;
+};
+
+$('#savedCap').onclick=async()=>{
+  const t = await api.loadSavedCaption();
+  if(!t){ toast('Nenhuma legenda salva'); return; }
+  $('#caption').value = t;
+  $('#caption').dispatchEvent(new Event('input'));
+};
+
+const cap=$('#caption');
+cap.addEventListener('input',()=>{ cap.style.height='auto'; cap.style.height=Math.min(cap.scrollHeight,110)+'px'; });
+
+$('#plus').onclick=()=>{ state.times++; $('#timesVal').textContent=state.times; };
+$('#minus').onclick=()=>{ if(state.times>1){ state.times--; $('#timesVal').textContent=state.times; } };
+
+function openSheet(){
+  $('#sGroup').textContent=state.group.subject;
+  $('#sMedia').textContent=state.file.name;
+  $('#sType').textContent=state.type;
+  $('#sTimes').textContent=state.times;
+  $('#sCap').textContent=cap.value.trim()||'(sem legenda)';
+  $('#backdrop').classList.add('show');
+  $('#confirmSheet').classList.add('show');
+}
+function closeSheet(){ $('#backdrop').classList.remove('show'); $('#confirmSheet').classList.remove('show'); }
+
+$('#sendFab').onclick=openSheet;
+$('#cancelSend').onclick=closeSheet;
+$('#backdrop').onclick=()=>{ if(dialogClose) dialogClose(false); else closeSheet(); };
+
+$('#confirmSend').onclick=async()=>{
+  closeSheet();
+  const card=$('#progCard'), list=$('#progList'), spin=card.querySelector('.spinner');
+  list.innerHTML=''; $('#progTitle').textContent='Enviando…'; spin.style.display='block';
+  $('#backdrop').classList.add('show'); card.style.display='block';
+
+  try{
+    await api.postStatus(
+      { file:state.file, groupId:state.group.id, caption:cap.value.trim(), times:state.times },
+      (i,total)=>{
+        $('#progTitle').textContent='Postando status…';
+        const l=document.createElement('div'); l.className='ok';
+        l.textContent=`✅ Status ${i}/${total} postado`;
+        list.appendChild(l); list.scrollTop=list.scrollHeight;
+      },
+      (ev)=>{
+        const l=document.createElement('div'); l.className='warn';
+        l.textContent = ev.type==='retry'
+          ? `↻ Reenviando ${ev.current}/${ev.total} (tentativa ${ev.attempt}/${ev.attempts})`
+          : `⚠️ Falhou ${ev.current}/${ev.total}`;
+        list.appendChild(l); list.scrollTop=list.scrollHeight;
+      }
+    );
+    $('#progTitle').textContent='Concluído'; spin.style.display='none';
+    await delay(700);
+    card.style.display='none'; $('#backdrop').classList.remove('show');
+    toast(state.times>1?`${state.times} status postados`:'Status postado');
+    resetCompose();
+  }catch(e){
+    spin.style.display='none'; $('#progTitle').textContent='Falha ao postar';
+    await delay(1600);
+    card.style.display='none'; $('#backdrop').classList.remove('show');
+  }
+};
+
+/* ── menu + trocar conta ── */
+let dialogClose = null;
+function confirmDialog(title, msg, okLabel){
+  $('#dlgTitle').textContent = title;
+  $('#dlgMsg').textContent = msg;
+  $('#dlgOk').textContent = okLabel || 'Confirmar';
+  $('#backdrop').classList.add('show');
+  $('#confirmDialog').classList.add('show');
+  return new Promise(res=>{
+    dialogClose = (val)=>{
+      $('#backdrop').classList.remove('show');
+      $('#confirmDialog').classList.remove('show');
+      dialogClose = null; res(val);
+    };
+    $('#dlgOk').onclick = ()=>dialogClose(true);
+    $('#dlgCancel').onclick = ()=>dialogClose(false);
+  });
+}
+
+$('#menuBtn').onclick = (e)=>{ e.stopPropagation(); $('#mainMenu').classList.toggle('show'); };
+document.addEventListener('click', ()=>$('#mainMenu').classList.remove('show'));
+
+$('#logoutItem').onclick = async ()=>{
+  $('#mainMenu').classList.remove('show');
+  const ok = await confirmDialog(
+    'Trocar conta?',
+    'Isso desconecta a conta atual e apaga a sessão salva. Você vai precisar parear de novo com um código.',
+    'Sim, trocar'
+  );
+  if(!ok) return;
+  const card=$('#progCard'); $('#progList').innerHTML='';
+  $('#progTitle').textContent='Desconectando…';
+  card.querySelector('.spinner').style.display='block';
+  $('#backdrop').classList.add('show'); card.style.display='block';
+  wsSend({ type:'logout' });
+};
+
+function onLoggedOut(){
+  connOpen = false;
+  $('#progCard').style.display='none';
+  $('#backdrop').classList.remove('show');
+  $('#codeArea').style.display='none';
+  $('#pairCode').textContent='---- ----';
+  $('#genBtn').disabled=false; $('#genBtn').textContent='Gerar código';
+  go('connect');
+  toast('Conta desconectada');
+}
+
+connectWS();
+</script>
+</body>
+</html>
