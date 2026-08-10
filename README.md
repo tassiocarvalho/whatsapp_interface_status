@@ -9,6 +9,8 @@ O servidor Node segura a conexão do Baileys viva; o navegador é só a tela.
 status-bot-web/
 ├── server.js            → backend (Baileys + Express + WebSocket + upload)
 ├── package.json
+├── setup.sh              → instala tudo no Termux/Linux/macOS
+├── setup.bat / setup.ps1 → instala tudo no Windows
 ├── public/
 │   └── index.html       → front-end (a interface)
 ├── legenda_status.txt   → criado sozinho; edite pra usar "legenda salva"
@@ -29,34 +31,50 @@ isso o `npm install` abaixo é obrigatório antes do primeiro `npm start`.
 
 ## Instalar (uma vez)
 
-### Termux (Android)
+Tem um script que resolve tudo sozinho — instala Node/ffmpeg que faltar e
+já roda o `npm install`. Depois disso é só `npm start` pra sempre.
 
-De preferência instale o Termux pela F-Droid, não pela Play Store:
+### Termux (Android) / Linux / macOS
+
+De preferência instale o Termux pela F-Droid, não pela Play Store.
 
 ```bash
-pkg update && pkg install nodejs ffmpeg
 cd status-bot-web
-npm install
+bash setup.sh
 ```
 
-### Windows / Linux / macOS
+### Windows
+
+Dê **duplo clique em `setup.bat`** (na pasta do projeto), ou pelo terminal:
+
+```powershell
+cd status-bot-web
+.\setup.bat
+```
+
+Se o Windows bloquear o `.bat` de primeira, clique em "Mais informações" →
+"Executar assim mesmo" (é só o script chamando winget e npm, nada externo).
+
+Se o script instalar o Node.js agora (máquina sem Node), feche o terminal,
+abra um novo e rode `setup.bat` de novo — só assim o `PATH` atualiza.
+
+### Manual (sem os scripts)
 
 ```bash
 # Node.js 20+: https://nodejs.org (baixe o instalador LTS)
 # ffmpeg (opcional):
-#   Windows → winget install Gyan.FFmpeg
-#   Linux   → sudo apt install ffmpeg  (ou o gerenciador da sua distro)
-#   macOS   → brew install ffmpeg
+#   Termux   → pkg install nodejs ffmpeg
+#   Windows  → winget install Gyan.FFmpeg
+#   Linux    → sudo apt install ffmpeg  (ou o gerenciador da sua distro)
+#   macOS    → brew install ffmpeg
 
 cd status-bot-web
 npm install
 ```
 
-Depois de clonar o repositório com `git clone`, rode `npm install` antes de
-qualquer coisa — sem isso o `npm start` não encontra as dependências. Um
-único `npm install` já baixa todas elas de uma vez (lê o `package.json`):
-`express`, `ws`, `multer`, `pino` e `@neoxr/baileys` (o Baileys, que fala
-com o WhatsApp) — nenhuma precisa ser instalada à parte.
+Um único `npm install` já baixa todas as dependências de uma vez (lê o
+`package.json`): `express`, `ws`, `multer`, `pino` e `@neoxr/baileys` (o
+Baileys, que fala com o WhatsApp) — nenhuma precisa ser instalada à parte.
 
 ## Rodar
 
