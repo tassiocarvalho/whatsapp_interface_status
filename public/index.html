@@ -404,7 +404,19 @@ function route(m){
     case 'postError':     if(pendingPost){ pendingPost.reject(new Error(m.message)); pendingPost = null; } toast('Erro: ' + m.message); break;
     case 'loggedOut':     onLoggedOut(); break;
     case 'logoutError':   toast(m.message); break;
+    case 'stage':         onStage(m); break;
   }
+}
+
+function onStage(m){
+  if(m.warn){
+    const l=document.createElement('div'); l.className='warn'; l.textContent=m.text;
+    $('#progList').appendChild(l); $('#progList').scrollTop=$('#progList').scrollHeight;
+    return;
+  }
+  let txt = m.text || '';
+  if(typeof m.percent === 'number') txt += ' ' + m.percent + '%';
+  $('#progTitle').textContent = txt;
 }
 
 function handleStatus(m){

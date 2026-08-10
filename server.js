@@ -54,13 +54,16 @@ if (!fs.existsSync(ARQUIVO_LEGENDA)) {
 }
 
 // ─── FFMPEG / FFPROBE ─────────────────────────────────────────
+const EH_TERMUX = !!(process.env.PREFIX && process.env.PREFIX.includes('com.termux'));
+function ffmpegEnv() {
+    const env = { ...process.env };
+    if (EH_TERMUX) env.PATH = `/data/data/com.termux/files/usr/bin:${process.env.PATH || ''}`;
+    return env;
+}
 function resolverBin(nomes) {
     for (const bin of nomes) {
         try {
-            execSync(`${bin} -version`, {
-                stdio: 'ignore',
-                env: { ...process.env, PATH: `/data/data/com.termux/files/usr/bin:${process.env.PATH || ''}` }
-            });
+            execSync(`"${bin}" -version`, { stdio: 'ignore', env: ffmpegEnv() });
             return bin;
         } catch {}
     }
@@ -68,6 +71,18 @@ function resolverBin(nomes) {
 }
 const resolverFfmpeg = () => resolverBin(['ffmpeg', '/data/data/com.termux/files/usr/bin/ffmpeg', '/usr/bin/ffmpeg', '/usr/local/bin/ffmpeg']);
 const resolverFfprobe = () => resolverBin(['ffprobe', '/data/data/com.termux/files/usr/bin/ffprobe', '/usr/bin/ffprobe', '/usr/local/bin/ffprobe']);
+
+function duracaoSegundos(ffprobe, filePath, env) {
+    if (!ffprobe) return 0;
+    try {
+        const out = execSync(
+            `"${ffprobe}" -v error -show_entries format=duration -of csv=p=0 "${filePath}"`,
+            { encoding: 'utf8', env }
+        ).trim();
+        const d = parseFloat(out);
+        return isFinite(d) ? d : 0;
+    } catch { return 0; }
+}
 
 function temAudio(ffprobe, filePath, env) {
     if (!ffprobe) return true;
@@ -108,16 +123,22 @@ function detectarTipoMidia(filePath) {
 }
 
 // ─── CONVERSÃO DE VÍDEO ───────────────────────────────────────
-async function converterVideoSeNecessario(filePath) {
+async function converterVideoSeNecessario(filePath, emit) {
     const saida = TMP_MIDIA + '_conv.mp4';
     const ffmpeg = resolverFfmpeg();
-    if (!ffmpeg) { console.log('⚠️  ffmpeg não encontrado. Instale com: pkg install ffmpeg'); return filePath; }
+    if (!ffmpeg) {
+        console.log('⚠️  ffmpeg não encontrado.');
+        emit && emit({ type: 'stage', text: '⚠️ ffmpeg não encontrado — vídeo pode não reproduzir', warn: true });
+        return filePath;
+    }
 
     console.log('🔄 Convertendo vídeo para WhatsApp...');
-    const env = { ...process.env, PATH: `/data/data/com.termux/files/usr/bin:${process.env.PATH || ''}` };
+    const env = ffmpegEnv();
     const ffprobe = resolverFfprobe();
     const comAudio = temAudio(ffprobe, filePath, env);
+    const dur = duracaoSegundos(ffprobe, filePath, env);
     if (!comAudio) console.log('🔇 Vídeo sem áudio — adicionando trilha silenciosa.');
+    emit && emit({ type: 'stage', text: 'Convertendo vídeo…', percent: 0 });
 
     const args = ['-y', '-i', filePath];
     if (!comAudio) args.push('-f', 'lavfi', '-i', 'anullsrc=channel_layout=stereo:sample_rate=44100');
@@ -134,26 +155,50 @@ async function converterVideoSeNecessario(filePath) {
     );
 
     return new Promise((resolve) => {
-        const proc = spawn(ffmpeg, args, { stdio: 'inherit', env });
+        const proc = spawn(ffmpeg, args, { env, stdio: ['ignore', 'ignore', 'pipe'] });
+        proc.stderr.on('data', (d) => {
+            const m = d.toString().match(/time=(\d+):(\d+):(\d+(?:\.\d+)?)/);
+            if (m && dur > 0) {
+                const t = (+m[1]) * 3600 + (+m[2]) * 60 + parseFloat(m[3]);
+                const pct = Math.max(0, Math.min(99, Math.round(t / dur * 100)));
+                emit && emit({ type: 'stage', text: 'Convertendo vídeo…', percent: pct });
+            }
+        });
         proc.on('close', (code) => {
             if (code === 0 && fs.existsSync(saida)) {
                 const kb = Math.round(fs.statSync(saida).size / 1024);
                 console.log(`✅ Conversão concluída. Tamanho: ${kb}KB`);
-                if (kb > 15360) console.log('⚠️  Arquivo acima de 15MB — WhatsApp pode rejeitar.');
+                emit && emit({ type: 'stage', text: 'Convertendo vídeo…', percent: 100 });
+                if (kb > 15360) {
+                    console.log('⚠️  Arquivo acima de 15MB — WhatsApp pode rejeitar.');
+                    emit && emit({ type: 'stage', text: '⚠️ Vídeo grande (>15MB) — pode ser rejeitado', warn: true });
+                }
                 resolve(saida);
-            } else { console.log('❌ Conversão ffmpeg falhou. Enviando original...'); resolve(filePath); }
+            } else {
+                console.log('❌ Conversão ffmpeg falhou. Enviando original...');
+                emit && emit({ type: 'stage', text: '⚠️ Conversão falhou — enviando original', warn: true });
+                resolve(filePath);
+            }
         });
-        proc.on('error', (e) => { console.log('❌ Erro ffmpeg:', e.message); resolve(filePath); });
+        proc.on('error', (e) => {
+            console.log('❌ Erro ffmpeg:', e.message);
+            emit && emit({ type: 'stage', text: '⚠️ Erro no ffmpeg — enviando original', warn: true });
+            resolve(filePath);
+        });
     });
 }
 
 // ─── OTIMIZAÇÃO DE IMAGEM ─────────────────────────────────────
 const MAX_LADO_IMG = 1600;
-async function recomprimirImagem(filePath) {
+async function recomprimirImagem(filePath, emit) {
     const ffmpeg = resolverFfmpeg();
-    if (!ffmpeg) { console.log('⚠️  ffmpeg não encontrado — enviando imagem original.'); return filePath; }
+    if (!ffmpeg) {
+        console.log('⚠️  ffmpeg não encontrado — enviando imagem original.');
+        emit && emit({ type: 'stage', text: '⚠️ ffmpeg não encontrado — imagem original', warn: true });
+        return filePath;
+    }
 
-    const env = { ...process.env, PATH: `/data/data/com.termux/files/usr/bin:${process.env.PATH || ''}` };
+    const env = ffmpegEnv();
     const saida = TMP_MIDIA + '_img.jpg';
     const vf = `scale=w='if(gte(iw,ih),min(${MAX_LADO_IMG},iw),-1)':h='if(gte(iw,ih),-1,min(${MAX_LADO_IMG},ih))'`;
     const args = ['-y', '-i', filePath, '-vf', vf, '-q:v', '2', saida];
@@ -195,6 +240,21 @@ function getMime(filePath, tipo) {
     return 'application/octet-stream';
 }
 
+// ─── THUMBNAIL DO VÍDEO ───────────────────────────────────────
+// Status de vídeo sem miniatura costuma aparecer como "arquivo com erro"
+// no outro lado. Extraímos um frame com ffmpeg e enviamos como jpegThumbnail.
+function gerarThumbnailVideo(filePath) {
+    const ffmpeg = resolverFfmpeg();
+    if (!ffmpeg) return undefined;
+    const thumb = TMP_MIDIA + '_thumb.jpg';
+    try {
+        execSync(`"${ffmpeg}" -y -ss 0 -i "${filePath}" -frames:v 1 -vf scale=320:-2 "${thumb}"`,
+            { stdio: 'ignore', env: ffmpegEnv() });
+        if (fs.existsSync(thumb) && fs.statSync(thumb).size > 0) return fs.readFileSync(thumb);
+    } catch {}
+    return undefined;
+}
+
 // ─── ENVIO COM RETRY ──────────────────────────────────────────
 async function enviarComRetry(sock, groupId, conteudo, tentativas, onRetry) {
     for (let t = 1; t <= tentativas; t++) {
@@ -214,12 +274,12 @@ async function enviarComRetry(sock, groupId, conteudo, tentativas, onRetry) {
 }
 
 // ─── POSTAR STATUS ────────────────────────────────────────────
-async function postarStatus(sock, groupId, filePath, legenda, tipo, vezes, onEvent) {
+async function postarStatus(sock, groupId, filePath, legenda, tipo, vezes, onEvent, thumbnail) {
     const mime = getMime(filePath, tipo);
     const buffer = fs.readFileSync(filePath);
     const conteudo = tipo === 'imagem'
         ? { image: buffer, caption: legenda, mimetype: mime, groupStatus: true }
-        : { video: buffer, caption: legenda, mimetype: 'video/mp4', groupStatus: true };
+        : { video: buffer, caption: legenda, mimetype: 'video/mp4', groupStatus: true, ...(thumbnail ? { jpegThumbnail: thumbnail } : {}) };
 
     for (let i = 0; i < vezes; i++) {
         try {
@@ -322,13 +382,20 @@ async function doPost(ws, { uploadId, groupId, caption, times }) {
         return;
     }
     try {
+        const emit = (obj) => send(ws, obj);
         const tipo = detectarTipoMidia(filePath);
         let arquivoFinal = filePath;
-        if (tipo === 'video') arquivoFinal = await converterVideoSeNecessario(filePath);
-        else if (tipo === 'imagem') arquivoFinal = await recomprimirImagem(filePath);
+        let thumb;
+        if (tipo === 'video') {
+            arquivoFinal = await converterVideoSeNecessario(filePath, emit);
+            thumb = gerarThumbnailVideo(arquivoFinal);
+        } else if (tipo === 'imagem') {
+            arquivoFinal = await recomprimirImagem(filePath, emit);
+        }
 
+        emit({ type: 'stage', text: 'Enviando para o WhatsApp…' });
         const n = Math.max(1, parseInt(times) || 1);
-        await postarStatus(sock, groupId, arquivoFinal, caption || '', tipo, n, (ev) => send(ws, ev));
+        await postarStatus(sock, groupId, arquivoFinal, caption || '', tipo, n, emit, thumb);
         send(ws, { type: 'postDone', total: n });
     } catch (e) {
         send(ws, { type: 'postError', message: e.message });
