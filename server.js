@@ -24,7 +24,7 @@ const _err = console.error.bind(console);
 console.error = (...a) => { if (!ehRuido(a.join(' '))) _err(...a); };
 
 // ─── DEPENDÊNCIAS ─────────────────────────────────────────────
-let makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion;
+let makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, jidNormalizedUser;
 
 const express = require('express');
 const { WebSocketServer } = require('ws');
@@ -306,6 +306,7 @@ async function startSock() {
         useMultiFileAuthState = baileys.useMultiFileAuthState;
         DisconnectReason = baileys.DisconnectReason;
         fetchLatestBaileysVersion = baileys.fetchLatestBaileysVersion;
+        jidNormalizedUser = baileys.jidNormalizedUser;
     }
 
     const { state, saveCreds } = await useMultiFileAuthState('./auth_info_baileys');
@@ -356,12 +357,49 @@ async function requestPairing(number, ws) {
     }
 }
 
+// groupFetchAllParticipating() não pede o bit de "somente admins" no request,
+// então announce sempre volta falso ali — precisa do groupMetadata individual
+// (query "interactive") pra saber se o grupo é fechado de verdade.
+// nosso número segue sendo admin mesmo em grupo "somente admins" — só bloqueia
+// quem NÃO é admin, então checamos os dois antes de decidir se avisa o usuário.
+function souAdminNoGrupo(participants) {
+    const me = sock?.user;
+    if (!me) return true; // sem certeza, não bloqueia à toa
+    const meuJid = [me.id, me.lid].filter(Boolean).map(jidNormalizedUser);
+    return (participants || []).some(p => {
+        const pJid = [p.id, p.lid].filter(Boolean).map(jidNormalizedUser);
+        return pJid.some(j => meuJid.includes(j)) && (p.admin === 'admin' || p.admin === 'superadmin');
+    });
+}
+
+async function infoDoGrupo(id) {
+    try {
+        const full = await sock.groupMetadata(id);
+        console.log(`🔍 ${id} → announce=${full.announce} restrict=${full.restrict}`);
+        return { announce: !!full.announce, souAdmin: souAdminNoGrupo(full.participants) };
+    } catch (e) {
+        console.log(`⚠️  groupMetadata falhou pra ${id}: ${e.message}`);
+        return { announce: false, souAdmin: true };
+    }
+}
+
+async function fotoDoGrupo(id) {
+    try { return await sock.profilePictureUrl(id, 'image'); }
+    catch { return null; }
+}
+
 async function fetchGroups(ws) {
     try {
         const groups = await sock.groupFetchAllParticipating();
-        const list = Object.values(groups).map(g => ({
-            id: g.id, subject: g.subject, size: (g.participants || []).length
-        }));
+        const base = Object.values(groups).filter(g => !g.isCommunity && !g.isCommunityAnnounce);
+        const list = [];
+        for (const g of base) {
+            const [info, picture] = await Promise.all([infoDoGrupo(g.id), fotoDoGrupo(g.id)]);
+            list.push({
+                id: g.id, subject: g.subject, size: (g.participants || []).length,
+                announce: info.announce, souAdmin: info.souAdmin, picture
+            });
+        }
         send(ws, { type: 'groups', groups: list });
     } catch (e) {
         send(ws, { type: 'groups', groups: [] });

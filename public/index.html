@@ -54,6 +54,7 @@
     width:46px; height:46px; border-radius:50%; flex-shrink:0;
     display:flex; align-items:center; justify-content:center;
     font-weight:600; font-size:16px; color:#0b141a;
+    object-fit:cover; background-size:cover; background-position:center;
   }
 
   #connect .body{
@@ -114,9 +115,13 @@
     border-bottom:1px solid var(--div);
   }
   .row:active{background:var(--panel);}
-  .row .name{font-size:16.5px; color:var(--txt); font-weight:400;}
+  .row .name{font-size:16.5px; color:var(--txt); font-weight:400; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
   .row .desc{font-size:13.5px; color:var(--txt2); margin-top:3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
   .row .meta{flex:1; min-width:0;}
+  .row .lock-badge{
+    flex-shrink:0; width:32px; height:32px; border-radius:50%;
+    display:flex; align-items:center; justify-content:center;
+  }
 
   #compose .scroll{padding:16px; display:flex; flex-direction:column; gap:16px;}
   .drop{
@@ -298,7 +303,7 @@
       <button class="icon-btn" id="backCompose">
         <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20z"/></svg>
       </button>
-      <div class="avatar" id="cAvatar" style="width:40px;height:40px;font-size:15px;"></div>
+      <div id="cAvatarWrap" style="width:40px;height:40px;flex-shrink:0;"></div>
       <div class="grow">
         <div class="title" id="cGroupName" style="font-size:16.5px;"></div>
         <div class="sub">Novo status de grupo</div>
@@ -461,6 +466,13 @@ const state = { group:null, file:null, type:null, times:1 };
 const palette = ['#0a927b','#8b5cf6','#e0803a','#3d7ce0','#c0518f','#5aa02c','#c94f4f','#0f8bb0'];
 const colorFor = s => palette[[...s].reduce((a,c)=>a+c.charCodeAt(0),0)%palette.length];
 const initials = s => s.replace(/[^\p{L}\p{N} ]/gu,'').trim().split(/\s+/).slice(0,2).map(w=>w[0]||'').join('').toUpperCase()||'#';
+const lockIcon = closed => closed
+  ? `<svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor"><path d="M12 17a2 2 0 0 0 2-2 2 2 0 0 0-2-2 2 2 0 0 0-2 2 2 2 0 0 0 2 2m6-9a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V10a2 2 0 0 1 2-2h1V6a5 5 0 0 1 10 0v2zm-6-5a3 3 0 0 0-3 3v2h6V6a3 3 0 0 0-3-3z"/></svg>`
+  : `<svg width="17" height="17" viewBox="0 0 24 24" fill="currentColor"><path d="M18 8h-1V6a5 5 0 0 0-9.9-1h2.1a3 3 0 0 1 5.8 1v2H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V10a2 2 0 0 0-2-2m0 12H6V10h12z"/></svg>`;
+const lockBadge = closed => `<div class="lock-badge" style="background:${closed?'rgba(241,92,109,.16)':'rgba(0,168,132,.16)'}; color:${closed?'var(--danger)':'var(--green)'}" title="${closed?'Somente admins podem enviar mensagens':'Todos podem enviar mensagens'}">${lockIcon(closed)}</div>`;
+const avatarHtml = (g, extraStyle='') => g.picture
+  ? `<img class="avatar" src="${g.picture}" alt="" style="${extraStyle}">`
+  : `<div class="avatar" style="background:${colorFor(g.subject)};${extraStyle}">${initials(g.subject)}</div>`;
 
 function go(id){
   const cur = $('.screen.active');
@@ -513,12 +525,19 @@ function renderGroups(groups){
   filtered.forEach(g=>{
     const row=document.createElement('div'); row.className='row';
     row.innerHTML=`
-      <div class="avatar" style="background:${colorFor(g.subject)}">${initials(g.subject)}</div>
+      ${avatarHtml(g)}
       <div class="meta">
         <div class="name">${g.subject}</div>
         <div class="desc">${g.size} participantes · toque para postar status</div>
-      </div>`;
-    row.onclick=()=>openCompose(g);
+      </div>
+      ${lockBadge(g.announce)}`;
+    row.onclick=()=>{
+      if(g.announce && !g.souAdmin){
+        infoDialog('Grupo fechado', 'Não dá para postar status aqui: os admins deixaram esse grupo somente para admins enviarem mensagens.');
+        return;
+      }
+      openCompose(g);
+    };
     list.appendChild(row);
   });
 }
@@ -527,7 +546,7 @@ $('#grpSearch').oninput = ()=>renderGroups(lastGroups);
 function openCompose(g){
   state.group=g; state.file=null; state.type=null; state.times=1;
   $('#cGroupName').textContent=g.subject;
-  const av=$('#cAvatar'); av.textContent=initials(g.subject); av.style.background=colorFor(g.subject);
+  $('#cAvatarWrap').innerHTML=avatarHtml(g,'width:40px;height:40px;font-size:15px;');
   resetCompose();
   go('compose');
 }
@@ -629,6 +648,25 @@ $('#confirmSend').onclick=async()=>{
 
 /* ── menu + trocar conta ── */
 let dialogClose = null;
+function infoDialog(title, msg){
+  $('#dlgTitle').textContent = title;
+  $('#dlgMsg').textContent = msg;
+  $('#dlgCancel').style.display = 'none';
+  $('#dlgOk').textContent = 'Entendi';
+  $('#dlgOk').className = 'btn';
+  $('#backdrop').classList.add('show');
+  $('#confirmDialog').classList.add('show');
+  return new Promise(res=>{
+    dialogClose = ()=>{
+      $('#backdrop').classList.remove('show');
+      $('#confirmDialog').classList.remove('show');
+      $('#dlgCancel').style.display = '';
+      $('#dlgOk').className = 'btn danger';
+      dialogClose = null; res();
+    };
+    $('#dlgOk').onclick = ()=>dialogClose();
+  });
+}
 function confirmDialog(title, msg, okLabel){
   $('#dlgTitle').textContent = title;
   $('#dlgMsg').textContent = msg;
