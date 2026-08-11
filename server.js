@@ -36,6 +36,7 @@ const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
 const { spawn, execSync, exec } = require('child_process');
+const APP_VERSION = require('./package.json').version;
 
 process.on('uncaughtException', (err) => {
     if (err.code === 'ENOENT') return;
@@ -378,7 +379,7 @@ async function startSock() {
         if (connection) {
             latestStatus.connection = connection;
             if (connection === 'open') latestStatus.registered = true;
-            broadcast({ type: 'status', ...latestStatus });
+            broadcast({ type: 'status', ...latestStatus, version: APP_VERSION });
         }
         if (connection === 'open') console.log('🚀 Conectado ao WhatsApp.');
         if (connection === 'close') {
@@ -569,13 +570,30 @@ const execAsync = (cmd) => new Promise((resolve, reject) => {
     });
 });
 
+// pega só o bloco mais recente do CHANGELOG.md que tá no origin/main —
+// não precisa dar pull pra ler, "git show" lê o arquivo remoto direto.
+async function obterNotasVersao() {
+    try {
+        const conteudo = await execAsync('git show origin/main:CHANGELOG.md');
+        const bloco = conteudo.split(/\n(?=## )/).find(b => b.startsWith('## '));
+        if (!bloco) return null;
+        const linhas = bloco.split('\n');
+        const versao = linhas[0].replace(/^##\s*/, '').trim();
+        const notas = linhas.slice(1).filter(l => l.trim().startsWith('-')).map(l => l.replace(/^-\s*/, '').trim());
+        return notas.length ? { versao, notas } : null;
+    } catch {
+        return null;
+    }
+}
+
 async function obterInfoAtualizacao() {
     await execAsync('git fetch --quiet origin main');
     const atual = await execAsync('git rev-parse HEAD');
     const remoto = await execAsync('git rev-parse origin/main');
     if (atual === remoto) return { upToDate: true, commits: 0, log: [] };
     const log = (await execAsync('git log --oneline HEAD..origin/main')).split('\n').filter(Boolean);
-    return { upToDate: false, commits: log.length, log: log.slice(0, 8) };
+    const release = await obterNotasVersao();
+    return { upToDate: false, commits: log.length, log: log.slice(0, 8), release };
 }
 
 async function checkUpdate(ws) {
@@ -598,7 +616,7 @@ async function verificarAtualizacaoEmBackground() {
         const info = await obterInfoAtualizacao();
         updateCache = { ...info, checkedAt: Date.now() };
         if (!info.upToDate && eraAtualizado) {
-            broadcast({ type: 'updateAvailable', commits: info.commits, log: info.log });
+            broadcast({ type: 'updateAvailable', commits: info.commits, log: info.log, release: info.release });
         }
     } catch { /* checagem silenciosa — não incomoda o usuário se falhar */ }
 }
@@ -696,8 +714,8 @@ const wss = new WebSocketServer({ server });
 
 wss.on('connection', (ws) => {
     clients.add(ws);
-    send(ws, { type: 'status', ...latestStatus });
-    if (!updateCache.upToDate) send(ws, { type: 'updateAvailable', commits: updateCache.commits, log: updateCache.log });
+    send(ws, { type: 'status', ...latestStatus, version: APP_VERSION });
+    if (!updateCache.upToDate) send(ws, { type: 'updateAvailable', commits: updateCache.commits, log: updateCache.log, release: updateCache.release });
     ws.on('close', () => clients.delete(ws));
     ws.on('message', (raw) => {
         let m; try { m = JSON.parse(raw); } catch { return; }

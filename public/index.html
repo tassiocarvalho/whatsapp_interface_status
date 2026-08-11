@@ -295,6 +295,7 @@
   }
   .menu-item:active{background:var(--field);}
   .menu-item.danger{color:var(--danger);}
+  .menu-version{padding:8px 14px 2px; font-size:11.5px; color:var(--txt2); border-top:1px solid var(--div); margin-top:4px;}
   .dialog{
     position:absolute; left:50%; top:50%; transform:translate(-50%,-46%) scale(.96);
     width:84%; max-width:330px; background:var(--header); border-radius:18px;
@@ -302,7 +303,10 @@
   }
   .dialog.show{opacity:1; pointer-events:auto; transform:translate(-50%,-50%) scale(1);}
   .dialog h3{margin:0 0 10px; font-size:17px;}
-  .dialog p{margin:0 0 22px; color:var(--txt2); font-size:14px; line-height:1.5; white-space:pre-line; text-align:left;}
+  .dialog p{
+    margin:0 0 22px; color:var(--txt2); font-size:14px; line-height:1.5;
+    white-space:pre-line; text-align:left; max-height:38vh; overflow-y:auto;
+  }
   .dlg-actions{display:flex; gap:12px;}
   .dlg-actions .btn{flex:1;}
 
@@ -324,6 +328,7 @@
   <section class="screen active" id="connect">
     <div class="topbar">
       <div class="grow"><div class="title">Vincular dispositivo</div></div>
+      <span class="sub" id="appVersion"></span>
     </div>
     <div class="body">
       <div class="logo-ring">
@@ -473,6 +478,7 @@
   <div class="menu" id="mainMenu">
     <button class="menu-item" id="checkUpdateItem">Verificar atualizações</button>
     <button class="menu-item danger" id="logoutItem">Trocar conta</button>
+    <div class="menu-version" id="menuVersion"></div>
   </div>
 
   <div class="backdrop" id="backdrop"></div>
@@ -609,6 +615,10 @@ function handleStatus(m){
     connOpen = false;
   }
   updateConnPill(m.connection);
+  if(m.version){
+    $('#appVersion').textContent = 'v' + m.version;
+    $('#menuVersion').textContent = 'Versão ' + m.version;
+  }
 }
 
 function updateConnPill(conn){
@@ -1119,7 +1129,9 @@ let bannerUpdateInfo = null;
 function showUpdateBanner(m){
   if(updateBannerDismissed) return;
   bannerUpdateInfo = m;
-  $('#updateBannerText').textContent = `Nova atualização disponível (${m.commits} ${m.commits===1?'mudança':'mudanças'})`;
+  $('#updateBannerText').textContent = m.release
+    ? `Nova versão ${m.release.versao} disponível`
+    : `Nova atualização disponível (${m.commits} ${m.commits===1?'mudança':'mudanças'})`;
   $('#updateBanner').style.display='flex';
 }
 $('#updateBannerClose').onclick=()=>{
@@ -1128,18 +1140,21 @@ $('#updateBannerClose').onclick=()=>{
 };
 $('#updateBannerAction').onclick=()=>{
   $('#updateBanner').style.display='none';
-  handleUpdateStatus({ upToDate:false, commits:bannerUpdateInfo.commits, log:bannerUpdateInfo.log });
+  handleUpdateStatus({ upToDate:false, commits:bannerUpdateInfo.commits, log:bannerUpdateInfo.log, release:bannerUpdateInfo.release });
 };
 
 async function handleUpdateStatus(m){
   if(m.error){ toast('Erro ao verificar: ' + m.error); return; }
   if(m.upToDate){ toast('Você já está na versão mais recente'); return; }
-  const linhas = (m.log||[]).map(l=>'• '+l).join('\n');
-  const ok = await confirmDialog(
-    `Atualização disponível (${m.commits})`,
-    'Novidades:\n' + linhas,
-    'Atualizar agora'
-  );
+  let titulo, corpo;
+  if(m.release){
+    titulo = `Novidades da versão ${m.release.versao}`;
+    corpo = m.release.notas.map(n=>'• '+n).join('\n');
+  } else {
+    titulo = `Atualização disponível (${m.commits})`;
+    corpo = 'Novidades:\n' + (m.log||[]).map(l=>'• '+l).join('\n');
+  }
+  const ok = await confirmDialog(titulo, corpo, 'Atualizar agora');
   if(!ok) return;
   const card=$('#progCard'); $('#progList').innerHTML='';
   $('#progTitle').textContent='Atualizando…';
