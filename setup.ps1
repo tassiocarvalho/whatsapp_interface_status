@@ -19,6 +19,14 @@ if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) {
     Write-Host "OK: ffmpeg ja instalado" -ForegroundColor Green
 }
 
+Write-Host "Verificando yt-dlp..." -ForegroundColor Cyan
+if (-not (Get-Command yt-dlp -ErrorAction SilentlyContinue)) {
+    Write-Host "yt-dlp nao encontrado. Instalando via winget..." -ForegroundColor Yellow
+    winget install -e --id yt-dlp.yt-dlp
+} else {
+    Write-Host "OK: yt-dlp ja instalado" -ForegroundColor Green
+}
+
 Write-Host ""
 Write-Host "Instalando dependencias do projeto (npm install)..." -ForegroundColor Cyan
 npm install

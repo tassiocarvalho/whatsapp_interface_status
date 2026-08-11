@@ -250,6 +250,10 @@
     width:42px; height:42px; margin:0 auto 16px; border-radius:50%;
     border:3px solid var(--field); border-top-color:var(--green); animation:spin .8s linear infinite;
   }
+  .spinner-sm{
+    width:22px; height:22px; margin:0 auto 12px; border-radius:50%;
+    border:3px solid var(--field); border-top-color:var(--green); animation:spin .8s linear infinite;
+  }
   .prog-card h3{margin:0 0 14px; font-size:16px;}
   .prog-list{text-align:left; font-size:14px; color:var(--txt2); line-height:1.9; max-height:150px; overflow-y:auto;}
   .prog-list .ok{color:var(--txt);}
@@ -500,9 +504,9 @@
   <div class="sheet" id="musicSheet">
     <h3>Adicionar música</h3>
     <div class="type-choice">
-      <button class="type-card" id="pickItunes">
+      <button class="type-card" id="pickYoutube">
         <svg width="26" height="26" viewBox="0 0 24 24" fill="currentColor"><path d="M15.5 14a6.47 6.47 0 0 0 1.5-4.15C17 6.05 13.75 3 9.75 3S2.5 6.05 2.5 9.85s3.25 6.85 7.25 6.85a6.9 6.9 0 0 0 3.98-1.26l4.72 4.71 1.41-1.41zM9.75 14.7c-2.9 0-4.75-2.13-4.75-4.85S6.85 5 9.75 5s4.75 2.13 4.75 4.85-1.85 4.85-4.75 4.85"/></svg>
-        <span>Buscar música</span>
+        <span>Buscar no YouTube</span>
       </button>
       <button class="type-card" id="pickMp3">
         <input type="file" id="mp3Input" accept="audio/*" hidden>
@@ -512,12 +516,12 @@
     </div>
   </div>
 
-  <div class="sheet" id="itunesSheet">
-    <h3>Buscar música</h3>
-    <input class="field" id="itunesSearchInput" placeholder="Nome da música ou artista" autocomplete="off">
-    <div class="scroll" id="itunesResults" style="max-height:280px; margin-top:12px;"></div>
+  <div class="sheet" id="youtubeSheet">
+    <h3>Buscar no YouTube</h3>
+    <input class="field" id="youtubeSearchInput" placeholder="Nome da música ou artista" autocomplete="off">
+    <div class="scroll" id="youtubeResults" style="max-height:280px; margin-top:12px;"></div>
     <div class="sheet-actions">
-      <button class="btn ghost" id="closeItunes">Cancelar</button>
+      <button class="btn ghost" id="closeYoutube">Cancelar</button>
     </div>
   </div>
 
@@ -659,16 +663,17 @@ const api = {
     if(!up.ok) throw new Error('upload falhou');
     return up.json();
   },
-  async searchItunes(q){
-    const r = await fetch('/itunes-search?q=' + encodeURIComponent(q));
-    if(!r.ok) throw new Error('busca falhou');
-    return (await r.json()).results || [];
+  async searchYoutube(q){
+    const r = await fetch('/youtube-search?q=' + encodeURIComponent(q));
+    const data = await r.json();
+    if(!r.ok || data.error) throw new Error(data.error || 'busca falhou');
+    return data.results || [];
   },
-  async downloadItunesPreview(url){
-    const r = await fetch('/itunes-download?url=' + encodeURIComponent(url));
+  async downloadYoutubeAudio(id){
+    const r = await fetch('/youtube-download?id=' + encodeURIComponent(id));
     const data = await r.json();
     if(!r.ok || data.error) throw new Error(data.error || 'download falhou');
-    return data.uploadId;
+    return data;
   }
 };
 
@@ -840,7 +845,7 @@ function updateTrimLabels(){
   $('#trimStartLbl').textContent=fmtTime(state.music.start);
   $('#trimEndLbl').textContent=fmtTime(state.music.end);
 }
-function setMusic({ uploadId, name, artist, artwork, playSrc }){
+function setMusic({ uploadId, name, artist, artwork, playSrc, duration }){
   state.music = { uploadId, start:0, end:30, name };
   $('#musicName').textContent = name;
   $('#musicArtist').textContent = artist;
@@ -849,7 +854,7 @@ function setMusic({ uploadId, name, artist, artwork, playSrc }){
   const audio=$('#musicAudio');
   audio.src = playSrc;
   audio.onloadedmetadata=()=>{
-    const dur = isFinite(audio.duration) && audio.duration>0 ? audio.duration : 30;
+    const dur = isFinite(audio.duration) && audio.duration>0 ? audio.duration : (duration || 30);
     state.music.end = Math.min(dur, 30);
     $('#trimStart').max=dur; $('#trimEnd').max=dur;
     $('#trimStart').value=0; $('#trimEnd').value=state.music.end;
@@ -859,13 +864,16 @@ function setMusic({ uploadId, name, artist, artwork, playSrc }){
 }
 $('#trimStart').oninput=()=>{
   if(!state.music) return;
-  const v=Math.min(parseFloat($('#trimStart').value), state.music.end-1);
-  state.music.start=v; $('#trimStart').value=v; updateTrimLabels();
+  const dur=parseFloat($('#trimStart').max)||30;
+  const v=Math.max(0, Math.min(parseFloat($('#trimStart').value), dur-1));
+  state.music.start=v; state.music.end=Math.min(dur, v+30);
+  $('#trimStart').value=v; $('#trimEnd').value=state.music.end; updateTrimLabels();
 };
 $('#trimEnd').oninput=()=>{
   if(!state.music) return;
-  const v=Math.max(parseFloat($('#trimEnd').value), state.music.start+1);
-  state.music.end=v; $('#trimEnd').value=v; updateTrimLabels();
+  const v=Math.max(parseFloat($('#trimEnd').value), 1);
+  state.music.end=v; state.music.start=Math.max(0, v-30);
+  $('#trimStart').value=state.music.start; $('#trimEnd').value=v; updateTrimLabels();
 };
 $('#previewMusic').onclick=()=>{
   if(!state.music) return;
@@ -882,14 +890,14 @@ $('#removeMusic').onclick=()=>clearMusic();
 $('#addMusicChip').onclick=()=>{ $('#backdrop').classList.add('show'); $('#musicSheet').classList.add('show'); };
 function closeMusicSheet(){ $('#backdrop').classList.remove('show'); $('#musicSheet').classList.remove('show'); }
 
-function closeItunesSheet(){ $('#backdrop').classList.remove('show'); $('#itunesSheet').classList.remove('show'); }
-$('#closeItunes').onclick=closeItunesSheet;
+function closeYoutubeSheet(){ $('#backdrop').classList.remove('show'); $('#youtubeSheet').classList.remove('show'); }
+$('#closeYoutube').onclick=closeYoutubeSheet;
 
-$('#pickItunes').onclick=()=>{
+$('#pickYoutube').onclick=()=>{
   closeMusicSheet();
-  $('#itunesResults').innerHTML=''; $('#itunesSearchInput').value='';
-  $('#backdrop').classList.add('show'); $('#itunesSheet').classList.add('show');
-  setTimeout(()=>$('#itunesSearchInput').focus(), 200);
+  $('#youtubeResults').innerHTML=''; $('#youtubeSearchInput').value='';
+  $('#backdrop').classList.add('show'); $('#youtubeSheet').classList.add('show');
+  setTimeout(()=>$('#youtubeSearchInput').focus(), 200);
 };
 
 $('#pickMp3').onclick=()=>{ closeMusicSheet(); $('#mp3Input').click(); };
@@ -902,37 +910,54 @@ $('#mp3Input').onchange=async e=>{
   }catch{ toast('Erro ao enviar áudio'); }
 };
 
-let itunesTimer;
-$('#itunesSearchInput').oninput=()=>{
-  clearTimeout(itunesTimer);
-  const q=$('#itunesSearchInput').value.trim();
-  if(!q){ $('#itunesResults').innerHTML=''; return; }
-  itunesTimer=setTimeout(async()=>{
-    $('#itunesResults').innerHTML='<div class="empty">Buscando…</div>';
-    try{ renderItunesResults(await api.searchItunes(q)); }
-    catch{ $('#itunesResults').innerHTML='<div class="empty">Erro na busca.</div>'; }
+let youtubeTimer;
+$('#youtubeSearchInput').oninput=()=>{
+  clearTimeout(youtubeTimer);
+  const q=$('#youtubeSearchInput').value.trim();
+  if(!q){ $('#youtubeResults').innerHTML=''; return; }
+  youtubeTimer=setTimeout(async()=>{
+    $('#youtubeResults').innerHTML='<div class="empty">Buscando…</div>';
+    try{ renderYoutubeResults(await api.searchYoutube(q)); }
+    catch(e){ $('#youtubeResults').innerHTML=`<div class="empty">${e.message}</div>`; }
   }, 400);
 };
-function renderItunesResults(results){
-  const wrap=$('#itunesResults');
+function renderYoutubeResults(results){
+  const wrap=$('#youtubeResults');
   if(!results.length){ wrap.innerHTML='<div class="empty">Nada encontrado.</div>'; return; }
   wrap.innerHTML='';
   results.forEach(t=>{
     const row=document.createElement('div'); row.className='row';
-    row.innerHTML=`
-      <img class="avatar" src="${t.artwork}" alt="">
-      <div class="meta"><div class="name">${t.name}</div><div class="desc">${t.artist}</div></div>`;
-    row.onclick=()=>selectItunesTrack(t);
+    const img=document.createElement('img'); img.className='avatar'; img.src=t.artwork; img.alt='';
+    const meta=document.createElement('div'); meta.className='meta';
+    const name=document.createElement('div'); name.className='name'; name.textContent=t.name;
+    const desc=document.createElement('div'); desc.className='desc';
+    desc.textContent=`${t.artist} · ${fmtTime(t.duration)}${t.tooLong?' · acima do limite de 12 min':''}`;
+    meta.append(name,desc); row.append(img,meta);
+    if(t.tooLong){ row.style.opacity='.5'; row.onclick=()=>toast('Escolha um vídeo de até 12 minutos'); }
+    else row.onclick=()=>selectYoutubeTrack(t);
     wrap.appendChild(row);
   });
 }
-async function selectItunesTrack(t){
-  closeItunesSheet();
-  toast('Baixando prévia…');
+async function selectYoutubeTrack(t){
+  const wrap=$('#youtubeResults');
+  $('#youtubeSearchInput').disabled=true;
+  wrap.innerHTML='';
+  const box=document.createElement('div'); box.className='empty';
+  const spin=document.createElement('div'); spin.className='spinner-sm';
+  const txt=document.createElement('div'); txt.textContent=`Baixando "${t.name}"…`;
+  box.append(spin,txt); wrap.appendChild(box);
   try{
-    const uploadId = await api.downloadItunesPreview(t.previewUrl);
-    setMusic({ uploadId, name:t.name, artist:t.artist, artwork:t.artwork, playSrc:t.previewUrl });
-  }catch{ toast('Erro ao baixar a prévia'); }
+    const data = await api.downloadYoutubeAudio(t.id);
+    closeYoutubeSheet();
+    setMusic({ uploadId:data.uploadId, name:t.name, artist:t.artist, artwork:t.artwork, playSrc:data.audioUrl, duration:data.duration });
+    toast('Escolha qualquer trecho de até 30 segundos');
+  }catch(e){
+    wrap.innerHTML='';
+    const err=document.createElement('div'); err.className='empty'; err.textContent=e.message;
+    wrap.appendChild(err);
+  }finally{
+    $('#youtubeSearchInput').disabled=false;
+  }
 }
 
 /* ── status de texto ── */
@@ -990,7 +1015,7 @@ $('#backdrop').onclick=()=>{
   if(dialogClose) dialogClose(false);
   else if($('#typeSheet').classList.contains('show')) closeTypeSheet();
   else if($('#musicSheet').classList.contains('show')) closeMusicSheet();
-  else if($('#itunesSheet').classList.contains('show')) closeItunesSheet();
+  else if($('#youtubeSheet').classList.contains('show')) closeYoutubeSheet();
   else if($('#confirmSheet').classList.contains('show')) closeSheet();
   else if($('#progCard').querySelector('.spinner').style.display==='none' && $('#progCard').style.display==='block'){
     $('#progCard').style.display='none'; $('#backdrop').classList.remove('show');

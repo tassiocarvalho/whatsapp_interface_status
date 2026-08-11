@@ -70,11 +70,11 @@ Espere terminar com a mensagem **"Tudo pronto!"**.
 
 ```bash
 # Node.js 20+: https://nodejs.org (baixe o instalador LTS)
-# ffmpeg (opcional, mas recomendado):
-#   Termux   → pkg install nodejs ffmpeg
-#   Windows  → winget install Gyan.FFmpeg
-#   Linux    → sudo apt install ffmpeg
-#   macOS    → brew install ffmpeg
+# ffmpeg e yt-dlp (necessários para música do YouTube):
+#   Termux   → pkg install nodejs ffmpeg python && python -m pip install -U yt-dlp
+#   Windows  → winget install Gyan.FFmpeg && winget install yt-dlp.yt-dlp
+#   Linux    → sudo apt install ffmpeg python3-pip && python3 -m pip install --user -U yt-dlp
+#   macOS    → brew install ffmpeg yt-dlp
 
 npm install
 ```
@@ -149,9 +149,12 @@ whatsapp_interface_status/
 
 - **Node.js 20 ou superior** (o Baileys exige `>=20.0.0`) — confira com `node -v`.
 - **npm** (já vem junto com o Node).
-- **ffmpeg** (opcional, mas recomendado) — sem ele o bot ainda funciona, mas
+- **ffmpeg** — necessário para música; sem ele o restante ainda funciona, mas
   envia a mídia original sem converter (vídeo pode não reproduzir no status,
   imagem vai sem otimização).
+- **yt-dlp** — necessário para buscar no YouTube e preparar o áudio. O script
+  de instalação instala automaticamente. Use apenas conteúdo que você tenha
+  direito de baixar e reutilizar.
 - Conta de WhatsApp pra parear (número com DDI + DDD).
 
 ## Deixar com "cara de app" (opcional)

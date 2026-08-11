@@ -61,17 +61,63 @@ function ffmpegEnv() {
     if (EH_TERMUX) env.PATH = `/data/data/com.termux/files/usr/bin:${process.env.PATH || ''}`;
     return env;
 }
-function resolverBin(nomes) {
+// cache evita rodar execSync (bloqueia o event loop) toda vez que um vídeo
+// é convertido/otimizado — o caminho dos binários não muda durante o processo.
+const _binCache = {};
+function resolverBin(chave, nomes, verFlag = '-version') {
+    if (chave in _binCache) return _binCache[chave];
     for (const bin of nomes) {
         try {
-            execSync(`"${bin}" -version`, { stdio: 'ignore', env: ffmpegEnv() });
-            return bin;
+            execSync(`"${bin}" ${verFlag}`, { stdio: 'ignore', env: ffmpegEnv() });
+            return (_binCache[chave] = bin);
         } catch {}
     }
-    return null;
+    return null; // não cacheia falha: se o binário for instalado depois, a próxima chamada já acha
 }
-const resolverFfmpeg = () => resolverBin(['ffmpeg', '/data/data/com.termux/files/usr/bin/ffmpeg', '/usr/bin/ffmpeg', '/usr/local/bin/ffmpeg']);
-const resolverFfprobe = () => resolverBin(['ffprobe', '/data/data/com.termux/files/usr/bin/ffprobe', '/usr/bin/ffprobe', '/usr/local/bin/ffprobe']);
+const resolverFfmpeg = () => resolverBin('ffmpeg', ['ffmpeg', '/data/data/com.termux/files/usr/bin/ffmpeg', '/usr/bin/ffmpeg', '/usr/local/bin/ffmpeg']);
+const resolverFfprobe = () => resolverBin('ffprobe', ['ffprobe', '/data/data/com.termux/files/usr/bin/ffprobe', '/usr/bin/ffprobe', '/usr/local/bin/ffprobe']);
+function resolverYtDlp() {
+    const nomes = process.platform === 'win32'
+        ? ['yt-dlp.exe', 'yt-dlp']
+        : ['yt-dlp', '/data/data/com.termux/files/usr/bin/yt-dlp', '/usr/bin/yt-dlp', '/usr/local/bin/yt-dlp'];
+    return resolverBin('yt-dlp', nomes, '--version');
+}
+
+// yt-dlp NÃO faz busca em PATH pro valor de --ffmpeg-location (diferente do
+// resto do código, que usa spawn/execSync com resolução do próprio SO) — se
+// receber só "ffmpeg" (nome sem caminho) ele erra "ffprobe and ffmpeg not
+// found" mesmo com ffmpeg instalado e funcionando. Precisa do caminho absoluto.
+let _ffmpegAbsCache;
+function resolverFfmpegAbsoluto() {
+    if (_ffmpegAbsCache !== undefined) return _ffmpegAbsCache;
+    const bin = resolverFfmpeg();
+    if (!bin) return null;
+    if (path.isAbsolute(bin)) return (_ffmpegAbsCache = bin);
+    try {
+        const cmd = process.platform === 'win32' ? `where "${bin}"` : `command -v "${bin}"`;
+        const out = execSync(cmd, { encoding: 'utf8', env: ffmpegEnv() }).trim().split('\n')[0].trim();
+        return (_ffmpegAbsCache = out || null);
+    } catch { return null; }
+}
+
+function executar(bin, args, { timeout = 120000 } = {}) {
+    return new Promise((resolve, reject) => {
+        const proc = spawn(bin, args, { env: ffmpegEnv(), stdio: ['ignore', 'pipe', 'pipe'] });
+        let stdout = '', stderr = '';
+        const timer = setTimeout(() => {
+            proc.kill();
+            reject(new Error('A operação demorou demais. Tente novamente.'));
+        }, timeout);
+        proc.stdout.on('data', d => { stdout += d; });
+        proc.stderr.on('data', d => { stderr += d; });
+        proc.on('error', e => { clearTimeout(timer); reject(e); });
+        proc.on('close', code => {
+            clearTimeout(timer);
+            if (code === 0) resolve(stdout.trim());
+            else reject(new Error(stderr.trim().split('\n').slice(-3).join(' ') || `yt-dlp terminou com código ${code}`));
+        });
+    });
+}
 
 function duracaoSegundos(ffprobe, filePath, env) {
     if (!ffprobe) return 0;
@@ -699,46 +745,74 @@ app.post('/upload', upload.single('media'), (req, res) => {
     res.json({ uploadId: id });
 });
 
-// ─── MÚSICA — busca (iTunes Search API) e download da prévia ──
-function urlPermitidaItunes(u) {
-    try {
-        const { hostname, protocol } = new URL(u);
-        return protocol === 'https:' && (
-            hostname === 'itunes.apple.com' || hostname.endsWith('.mzstatic.com') || hostname.endsWith('.apple.com')
-        );
-    } catch { return false; }
-}
+// ─── MÚSICA — busca e extração de áudio do YouTube via yt-dlp ──
+const MAX_DURACAO_YOUTUBE = 12 * 60;
+const youtubeUrl = id => `https://www.youtube.com/watch?v=${id}`;
+const idYoutubeValido = id => /^[a-zA-Z0-9_-]{11}$/.test(String(id || ''));
 
-app.get('/itunes-search', async (req, res) => {
+app.get('/youtube-search', async (req, res) => {
     const termo = String(req.query.q || '').trim();
     if (!termo) return res.json({ results: [] });
+    if (termo.length > 100) return res.status(400).json({ results: [], error: 'Busca muito longa.' });
     try {
-        const r = await fetch(`https://itunes.apple.com/search?media=music&limit=15&term=${encodeURIComponent(termo)}`);
-        const data = await r.json();
-        const results = (data.results || [])
-            .filter(t => t.previewUrl)
-            .map(t => ({ id: t.trackId, name: t.trackName, artist: t.artistName, artwork: t.artworkUrl100, previewUrl: t.previewUrl }));
+        const ytDlp = resolverYtDlp();
+        if (!ytDlp) throw new Error('yt-dlp não encontrado. Rode o script de instalação novamente.');
+        const raw = await executar(ytDlp, [
+            '--dump-single-json', '--flat-playlist', '--playlist-end', '15',
+            '--no-warnings', `ytsearch15:${termo}`
+        ]);
+        const data = JSON.parse(raw);
+        const results = (data.entries || []).filter(v => idYoutubeValido(v.id)).map(v => ({
+            id: v.id,
+            name: v.title || 'Sem título',
+            artist: v.channel || v.uploader || 'YouTube',
+            artwork: v.thumbnail || `https://i.ytimg.com/vi/${v.id}/hqdefault.jpg`,
+            duration: Number(v.duration) || 0,
+            tooLong: Number(v.duration) > MAX_DURACAO_YOUTUBE
+        }));
         res.json({ results });
     } catch (e) {
         res.status(500).json({ results: [], error: e.message });
     }
 });
 
-app.get('/itunes-download', async (req, res) => {
-    const url = String(req.query.url || '');
-    if (!urlPermitidaItunes(url)) return res.status(400).json({ error: 'URL não permitida.' });
+app.get('/youtube-download', async (req, res) => {
+    const videoId = String(req.query.id || '');
+    if (!idYoutubeValido(videoId)) return res.status(400).json({ error: 'Vídeo inválido.' });
     try {
-        const r = await fetch(url);
-        if (!r.ok) throw new Error('download da prévia falhou');
-        const buf = Buffer.from(await r.arrayBuffer());
+        const ytDlp = resolverYtDlp();
+        if (!ytDlp) throw new Error('yt-dlp não encontrado. Rode o script de instalação novamente.');
+        const url = youtubeUrl(videoId);
+        // --print evita baixar o --dump-single-json inteiro (formatos, storyboards
+        // etc — dezenas de KB) só pra ler a duração.
+        const rawDuration = await executar(ytDlp, ['--no-playlist', '--no-warnings', '--print', '%(duration)s', url]);
+        const duration = Number(rawDuration) || 0;
+        if (!duration) throw new Error('Não consegui identificar a duração desse vídeo.');
+        if (duration > MAX_DURACAO_YOUTUBE) throw new Error('Escolha um vídeo de até 12 minutos.');
         const id = crypto.randomBytes(8).toString('hex');
-        const fp = path.join(UPLOAD_DIR, id + '.m4a');
-        fs.writeFileSync(fp, buf);
+        const base = path.join(UPLOAD_DIR, id);
+        const ffmpegAbs = resolverFfmpegAbsoluto();
+        await executar(ytDlp, [
+            '--no-playlist', '--no-warnings', '-x', '--audio-format', 'mp3',
+            '--audio-quality', '5',
+            ...(ffmpegAbs ? ['--ffmpeg-location', ffmpegAbs] : []),
+            '-o', `${base}.%(ext)s`, url
+        ], { timeout: 180000 });
+        const fp = `${base}.mp3`;
+        if (!fs.existsSync(fp)) throw new Error('O áudio não foi gerado.');
         uploads.set(id, fp);
-        res.json({ uploadId: id });
+        res.json({ uploadId: id, duration, audioUrl: `/youtube-audio/${id}` });
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
+});
+
+app.get('/youtube-audio/:id', (req, res) => {
+    const id = String(req.params.id || '');
+    const fp = uploads.get(id);
+    if (!idYoutubeValido(id) && !/^[a-f0-9]{16}$/.test(id)) return res.sendStatus(400);
+    if (!fp || !fs.existsSync(fp) || path.extname(fp).toLowerCase() !== '.mp3') return res.sendStatus(404);
+    res.type('audio/mpeg').sendFile(fp);
 });
 
 const server = http.createServer(app);
