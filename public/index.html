@@ -327,6 +327,8 @@
           <div class="status-pill"><span class="dot wait" id="connDot"></span><span id="connTxt">Aguardando confirmação…</span></div>
         </div>
       </div>
+
+      <button class="btn ghost" id="clearDataBtn" style="margin-top:24px;">Limpar dados salvos</button>
     </div>
   </section>
 
@@ -1038,19 +1040,29 @@ function confirmDialog(title, msg, okLabel){
 $('#menuBtn').onclick = (e)=>{ e.stopPropagation(); $('#mainMenu').classList.toggle('show'); };
 document.addEventListener('click', ()=>$('#mainMenu').classList.remove('show'));
 
-$('#logoutItem').onclick = async ()=>{
-  $('#mainMenu').classList.remove('show');
-  const ok = await confirmDialog(
-    'Trocar conta?',
-    'Isso desconecta a conta atual e apaga a sessão salva. Você vai precisar parear de novo com um código.',
-    'Sim, trocar'
-  );
+async function wipeSession(title, msg){
+  const ok = await confirmDialog(title, msg, 'Sim, limpar');
   if(!ok) return;
   const card=$('#progCard'); $('#progList').innerHTML='';
-  $('#progTitle').textContent='Desconectando…';
+  $('#progTitle').textContent='Limpando dados…';
   card.querySelector('.spinner').style.display='block';
   $('#backdrop').classList.add('show'); card.style.display='block';
   wsSend({ type:'logout' });
+}
+
+$('#logoutItem').onclick = ()=>{
+  $('#mainMenu').classList.remove('show');
+  wipeSession(
+    'Trocar conta?',
+    'Isso desconecta a conta atual e apaga a sessão salva. Você vai precisar parear de novo com um código.'
+  );
+};
+
+$('#clearDataBtn').onclick = ()=>{
+  wipeSession(
+    'Limpar dados salvos?',
+    'Apaga qualquer sessão do WhatsApp salva neste aparelho (pasta auth_info_baileys). Use se o pareamento travou ou não conecta. Você vai precisar gerar um código novo.'
+  );
 };
 
 function onLoggedOut(){
