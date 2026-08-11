@@ -611,7 +611,7 @@ function handleStatus(m){
     connOpen = true;
     resolveWaiters('open', true);
     if($('.screen.active')?.id === 'connect') enterGroups();
-  } else if(m.connection === 'loggedOut'){
+  } else if(m.connection === 'loggedOut' || m.connection === 'stuck'){
     connOpen = false;
   }
   updateConnPill(m.connection);
@@ -627,6 +627,7 @@ function updateConnPill(conn){
   if(conn === 'open'){ dot.className = 'dot on'; txt.textContent = 'Conectado'; }
   else if(conn === 'off'){ dot.className = 'dot off'; txt.textContent = 'Servidor offline'; }
   else if(conn === 'loggedOut'){ dot.className = 'dot off'; txt.textContent = 'Desconectado — gere novo código'; }
+  else if(conn === 'stuck'){ dot.className = 'dot off'; txt.textContent = 'Conexão travada — use "Limpar dados salvos" abaixo'; }
   else { dot.className = 'dot wait'; txt.textContent = 'Aguardando confirmação…'; }
 }
 

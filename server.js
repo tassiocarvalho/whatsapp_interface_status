@@ -366,6 +366,7 @@ async function postarStatus(sock, groupId, conteudo, opts, vezes, onEvent) {
 // ─── BAILEYS ──────────────────────────────────────────────────
 let sock = null;
 let latestStatus = { connection: 'connecting', registered: false };
+let tentativasReconexao = 0;
 
 async function startSock() {
     if (!makeWASocket) {
@@ -397,14 +398,26 @@ async function startSock() {
         const { connection, lastDisconnect } = update;
         if (connection) {
             latestStatus.connection = connection;
-            if (connection === 'open') latestStatus.registered = true;
+            if (connection === 'open') { latestStatus.registered = true; tentativasReconexao = 0; }
             broadcast({ type: 'status', ...latestStatus, version: APP_VERSION });
         }
         if (connection === 'open') console.log('🚀 Conectado ao WhatsApp.');
         if (connection === 'close') {
-            const reconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-            if (reconnect) setTimeout(startSock, 2000);
-            else broadcast({ type: 'status', connection: 'loggedOut', registered: false });
+            const statusCode = lastDisconnect?.error?.output?.statusCode;
+            const motivo = DisconnectReason[statusCode] || lastDisconnect?.error?.message || statusCode || 'desconhecido';
+            console.log(`🔌 Desconectado (${motivo}).`);
+
+            if (statusCode === DisconnectReason.loggedOut) {
+                broadcast({ type: 'status', connection: 'loggedOut', registered: false });
+                return;
+            }
+            tentativasReconexao++;
+            if (tentativasReconexao > 8) {
+                console.log('⚠️  Muitas reconexões seguidas — parei de tentar sozinho pra não ficar em loop infinito. Use "Limpar dados salvos" e pareie de novo.');
+                broadcast({ type: 'status', connection: 'stuck', registered: false });
+                return;
+            }
+            setTimeout(startSock, Math.min(2000 * tentativasReconexao, 15000));
         }
     });
 }
