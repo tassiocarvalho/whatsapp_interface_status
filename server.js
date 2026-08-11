@@ -255,11 +255,63 @@ function gerarThumbnailVideo(filePath) {
     return undefined;
 }
 
+// ─── MÚSICA (corte + mistura na foto/vídeo) ────────────────────
+function cortarAudio(filePath, inicio, fim) {
+    const ffmpeg = resolverFfmpeg();
+    if (!ffmpeg) return filePath;
+    const saida = TMP_MIDIA + '_musica.m4a';
+    const duracao = Math.max(0.5, fim - inicio);
+    try {
+        execSync(
+            `"${ffmpeg}" -y -ss ${inicio} -i "${filePath}" -t ${duracao} -vn -c:a aac -b:a 128k "${saida}"`,
+            { stdio: 'ignore', env: ffmpegEnv() }
+        );
+        if (fs.existsSync(saida) && fs.statSync(saida).size > 0) return saida;
+    } catch {}
+    return filePath;
+}
+
+// foto + música → vira um vídeo curto (imagem parada) com a duração do trecho cortado
+function fotoComMusica(fotoPath, musicaPath, duracaoSeg) {
+    const ffmpeg = resolverFfmpeg();
+    if (!ffmpeg) return null;
+    const saida = TMP_MIDIA + '_foto_musica.mp4';
+    const args = [
+        '-y', '-loop', '1', '-i', fotoPath, '-i', musicaPath,
+        '-t', String(duracaoSeg), '-vf', 'scale=-2:720', '-r', '30',
+        '-c:v', 'libx264', '-profile:v', 'baseline', '-level', '3.1', '-pix_fmt', 'yuv420p',
+        '-c:a', 'aac', '-b:a', '128k', '-shortest', '-movflags', '+faststart', saida
+    ];
+    return new Promise((resolve) => {
+        const proc = spawn(ffmpeg, args, { env: ffmpegEnv(), stdio: 'ignore' });
+        proc.on('close', (code) => resolve(code === 0 && fs.existsSync(saida) && fs.statSync(saida).size > 0 ? saida : null));
+        proc.on('error', () => resolve(null));
+    });
+}
+
+// vídeo + música → troca o áudio original do vídeo pela música escolhida
+function videoComMusica(videoPath, musicaPath) {
+    const ffmpeg = resolverFfmpeg();
+    if (!ffmpeg) return null;
+    const saida = TMP_MIDIA + '_video_musica.mp4';
+    const args = [
+        '-y', '-i', videoPath, '-i', musicaPath,
+        '-map', '0:v:0', '-map', '1:a:0',
+        '-c:v', 'copy', '-c:a', 'aac', '-b:a', '128k',
+        '-shortest', '-movflags', '+faststart', saida
+    ];
+    return new Promise((resolve) => {
+        const proc = spawn(ffmpeg, args, { env: ffmpegEnv(), stdio: 'ignore' });
+        proc.on('close', (code) => resolve(code === 0 && fs.existsSync(saida) && fs.statSync(saida).size > 0 ? saida : null));
+        proc.on('error', () => resolve(null));
+    });
+}
+
 // ─── ENVIO COM RETRY ──────────────────────────────────────────
-async function enviarComRetry(sock, groupId, conteudo, tentativas, onRetry) {
+async function enviarComRetry(sock, groupId, conteudo, opts, tentativas, onRetry) {
     for (let t = 1; t <= tentativas; t++) {
         try {
-            await sock.sendMessage(groupId, conteudo);
+            await sock.sendMessage(groupId, conteudo, opts);
             return true;
         } catch (e) {
             const msg = e?.message || String(e);
@@ -274,16 +326,12 @@ async function enviarComRetry(sock, groupId, conteudo, tentativas, onRetry) {
 }
 
 // ─── POSTAR STATUS ────────────────────────────────────────────
-async function postarStatus(sock, groupId, filePath, legenda, tipo, vezes, onEvent, thumbnail) {
-    const mime = getMime(filePath, tipo);
-    const buffer = fs.readFileSync(filePath);
-    const conteudo = tipo === 'imagem'
-        ? { image: buffer, caption: legenda, mimetype: mime, groupStatus: true }
-        : { video: buffer, caption: legenda, mimetype: 'video/mp4', groupStatus: true, ...(thumbnail ? { jpegThumbnail: thumbnail } : {}) };
-
+// conteudo já pronto pro sendMessage (imagem/vídeo/texto); opts carrega
+// coisas como backgroundColor (status de texto).
+async function postarStatus(sock, groupId, conteudo, opts, vezes, onEvent) {
     for (let i = 0; i < vezes; i++) {
         try {
-            await enviarComRetry(sock, groupId, conteudo, 4,
+            await enviarComRetry(sock, groupId, conteudo, opts, 4,
                 (t, tot, m) => onEvent && onEvent({ type: 'retry', current: i + 1, total: vezes, attempt: t, attempts: tot, message: m }));
             console.log(`✅ Status ${i + 1}/${vezes} postado!`);
             if (onEvent) onEvent({ type: 'progress', current: i + 1, total: vezes });
@@ -413,15 +461,16 @@ function loadSavedCaption(ws) {
     send(ws, { type: 'savedCaption', text });
 }
 
-async function doPost(ws, { uploadId, groupId, caption, times }) {
+async function doPost(ws, { uploadId, groupId, caption, times, musicUploadId, musicStart, musicEnd }) {
     const filePath = uploads.get(uploadId);
     if (!filePath || !fs.existsSync(filePath)) {
         send(ws, { type: 'postError', message: 'Arquivo não encontrado no servidor.' });
         return;
     }
+    const musicPath = musicUploadId ? uploads.get(musicUploadId) : null;
     try {
         const emit = (obj) => send(ws, obj);
-        const tipo = detectarTipoMidia(filePath);
+        let tipo = detectarTipoMidia(filePath);
         let arquivoFinal = filePath;
         let thumb;
         if (tipo === 'video') {
@@ -431,15 +480,60 @@ async function doPost(ws, { uploadId, groupId, caption, times }) {
             arquivoFinal = await recomprimirImagem(filePath, emit);
         }
 
+        if (musicPath && fs.existsSync(musicPath)) {
+            emit({ type: 'stage', text: 'Cortando o trecho da música…' });
+            const inicio = Math.max(0, parseFloat(musicStart) || 0);
+            const fim = Math.max(inicio + 0.5, parseFloat(musicEnd) || inicio + 5);
+            const trecho = cortarAudio(musicPath, inicio, fim);
+            emit({ type: 'stage', text: 'Misturando música na mídia…' });
+            if (tipo === 'imagem') {
+                const combinado = await fotoComMusica(arquivoFinal, trecho, fim - inicio);
+                if (combinado) { arquivoFinal = combinado; tipo = 'video'; thumb = gerarThumbnailVideo(arquivoFinal); }
+                else emit({ type: 'stage', text: '⚠️ Não deu pra adicionar música — enviando sem', warn: true });
+            } else if (tipo === 'video') {
+                const combinado = await videoComMusica(arquivoFinal, trecho);
+                if (combinado) arquivoFinal = combinado;
+                else emit({ type: 'stage', text: '⚠️ Não deu pra adicionar música — enviando sem', warn: true });
+            }
+        }
+
         emit({ type: 'stage', text: 'Enviando para o WhatsApp…' });
         const n = Math.max(1, parseInt(times) || 1);
-        await postarStatus(sock, groupId, arquivoFinal, caption || '', tipo, n, emit, thumb);
+        const mime = getMime(arquivoFinal, tipo);
+        const buffer = fs.readFileSync(arquivoFinal);
+        const conteudo = tipo === 'imagem'
+            ? { image: buffer, caption: caption || '', mimetype: mime, groupStatus: true }
+            : { video: buffer, caption: caption || '', mimetype: 'video/mp4', groupStatus: true, ...(thumb ? { jpegThumbnail: thumb } : {}) };
+        await postarStatus(sock, groupId, conteudo, {}, n, emit);
         send(ws, { type: 'postDone', total: n });
     } catch (e) {
         send(ws, { type: 'postError', message: e.message });
     } finally {
         try { fs.unlinkSync(filePath); } catch {}
         uploads.delete(uploadId);
+        if (musicUploadId) {
+            try { fs.unlinkSync(musicPath); } catch {}
+            uploads.delete(musicUploadId);
+        }
+    }
+}
+
+async function doPostText(ws, { groupId, text, backgroundColor, times }) {
+    const texto = (text || '').trim();
+    if (!texto) {
+        send(ws, { type: 'postError', message: 'Escreva algum texto pro status.' });
+        return;
+    }
+    try {
+        const emit = (obj) => send(ws, obj);
+        emit({ type: 'stage', text: 'Enviando para o WhatsApp…' });
+        const n = Math.max(1, parseInt(times) || 1);
+        const conteudo = { text: texto, groupStatus: true };
+        const opts = backgroundColor ? { backgroundColor } : {};
+        await postarStatus(sock, groupId, conteudo, opts, n, emit);
+        send(ws, { type: 'postDone', total: n });
+    } catch (e) {
+        send(ws, { type: 'postError', message: e.message });
     }
 }
 
@@ -496,6 +590,48 @@ app.post('/upload', upload.single('media'), (req, res) => {
     res.json({ uploadId: id });
 });
 
+// ─── MÚSICA — busca (iTunes Search API) e download da prévia ──
+function urlPermitidaItunes(u) {
+    try {
+        const { hostname, protocol } = new URL(u);
+        return protocol === 'https:' && (
+            hostname === 'itunes.apple.com' || hostname.endsWith('.mzstatic.com') || hostname.endsWith('.apple.com')
+        );
+    } catch { return false; }
+}
+
+app.get('/itunes-search', async (req, res) => {
+    const termo = String(req.query.q || '').trim();
+    if (!termo) return res.json({ results: [] });
+    try {
+        const r = await fetch(`https://itunes.apple.com/search?media=music&limit=15&term=${encodeURIComponent(termo)}`);
+        const data = await r.json();
+        const results = (data.results || [])
+            .filter(t => t.previewUrl)
+            .map(t => ({ id: t.trackId, name: t.trackName, artist: t.artistName, artwork: t.artworkUrl100, previewUrl: t.previewUrl }));
+        res.json({ results });
+    } catch (e) {
+        res.status(500).json({ results: [], error: e.message });
+    }
+});
+
+app.get('/itunes-download', async (req, res) => {
+    const url = String(req.query.url || '');
+    if (!urlPermitidaItunes(url)) return res.status(400).json({ error: 'URL não permitida.' });
+    try {
+        const r = await fetch(url);
+        if (!r.ok) throw new Error('download da prévia falhou');
+        const buf = Buffer.from(await r.arrayBuffer());
+        const id = crypto.randomBytes(8).toString('hex');
+        const fp = path.join(UPLOAD_DIR, id + '.m4a');
+        fs.writeFileSync(fp, buf);
+        uploads.set(id, fp);
+        res.json({ uploadId: id });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
@@ -509,6 +645,7 @@ wss.on('connection', (ws) => {
         if (m.type === 'fetchGroups') return fetchGroups(ws);
         if (m.type === 'loadSavedCaption') return loadSavedCaption(ws);
         if (m.type === 'post') return doPost(ws, m);
+        if (m.type === 'postText') return doPostText(ws, m);
         if (m.type === 'logout') return doLogout(ws);
     });
 });
