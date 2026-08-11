@@ -255,6 +255,22 @@
   .prog-list .ok{color:var(--txt);}
   .prog-list .warn{color:#e6b34a;}
 
+  .update-banner{
+    position:absolute; left:0; right:0; top:0; z-index:40;
+    display:none; align-items:center; gap:10px;
+    padding:8px 14px; padding-top:calc(8px + env(safe-area-inset-top));
+    background:rgba(0,168,132,.94); color:#04231c; font-size:12.5px;
+    backdrop-filter:blur(4px);
+  }
+  .update-banner span{flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .update-banner button{
+    background:none; border:none; color:#04231c; font-weight:600; font-size:12.5px;
+    cursor:pointer; padding:4px 2px; flex-shrink:0; text-decoration:underline;
+  }
+  .update-banner-close{
+    font-weight:400!important; text-decoration:none!important; opacity:.75; font-size:14px!important;
+  }
+
   .toast{
     position:absolute; left:50%; bottom:90px; transform:translateX(-50%) translateY(20px);
     background:#233138; color:var(--txt); padding:12px 20px; border-radius:24px; font-size:14px;
@@ -286,7 +302,7 @@
   }
   .dialog.show{opacity:1; pointer-events:auto; transform:translate(-50%,-50%) scale(1);}
   .dialog h3{margin:0 0 10px; font-size:17px;}
-  .dialog p{margin:0 0 22px; color:var(--txt2); font-size:14px; line-height:1.5;}
+  .dialog p{margin:0 0 22px; color:var(--txt2); font-size:14px; line-height:1.5; white-space:pre-line; text-align:left;}
   .dlg-actions{display:flex; gap:12px;}
   .dlg-actions .btn{flex:1;}
 
@@ -298,6 +314,12 @@
 </head>
 <body>
 <div id="app">
+
+  <div class="update-banner" id="updateBanner">
+    <span id="updateBannerText"></span>
+    <button id="updateBannerAction">Clique aqui para atualizar</button>
+    <button class="update-banner-close" id="updateBannerClose" aria-label="Fechar">✕</button>
+  </div>
 
   <section class="screen active" id="connect">
     <div class="topbar">
@@ -449,6 +471,7 @@
   </section>
 
   <div class="menu" id="mainMenu">
+    <button class="menu-item" id="checkUpdateItem">Verificar atualizações</button>
     <button class="menu-item danger" id="logoutItem">Trocar conta</button>
   </div>
 
@@ -558,6 +581,11 @@ function route(m){
     case 'loggedOut':     onLoggedOut(); break;
     case 'logoutError':   toast(m.message); break;
     case 'stage':         onStage(m); break;
+    case 'updateStatus':  handleUpdateStatus(m); break;
+    case 'updateStage':   onStage(m); break;
+    case 'updateDone':    onUpdateDone(m); break;
+    case 'updateError':   onUpdateError(m); break;
+    case 'updateAvailable': showUpdateBanner(m); break;
   }
 }
 
@@ -952,7 +980,10 @@ $('#backdrop').onclick=()=>{
   else if($('#typeSheet').classList.contains('show')) closeTypeSheet();
   else if($('#musicSheet').classList.contains('show')) closeMusicSheet();
   else if($('#itunesSheet').classList.contains('show')) closeItunesSheet();
-  else closeSheet();
+  else if($('#confirmSheet').classList.contains('show')) closeSheet();
+  else if($('#progCard').querySelector('.spinner').style.display==='none' && $('#progCard').style.display==='block'){
+    $('#progCard').style.display='none'; $('#backdrop').classList.remove('show');
+  }
 };
 
 $('#confirmSend').onclick=async()=>{
@@ -1074,6 +1105,62 @@ function onLoggedOut(){
   $('#genBtn').disabled=false; $('#genBtn').textContent='Gerar código';
   go('connect');
   toast('Conta desconectada');
+}
+
+/* ── verificar atualizações ── */
+$('#checkUpdateItem').onclick = ()=>{
+  $('#mainMenu').classList.remove('show');
+  toast('Verificando atualizações…');
+  wsSend({ type:'checkUpdate' });
+};
+
+let updateBannerDismissed = false;
+let bannerUpdateInfo = null;
+function showUpdateBanner(m){
+  if(updateBannerDismissed) return;
+  bannerUpdateInfo = m;
+  $('#updateBannerText').textContent = `Nova atualização disponível (${m.commits} ${m.commits===1?'mudança':'mudanças'})`;
+  $('#updateBanner').style.display='flex';
+}
+$('#updateBannerClose').onclick=()=>{
+  updateBannerDismissed = true;
+  $('#updateBanner').style.display='none';
+};
+$('#updateBannerAction').onclick=()=>{
+  $('#updateBanner').style.display='none';
+  handleUpdateStatus({ upToDate:false, commits:bannerUpdateInfo.commits, log:bannerUpdateInfo.log });
+};
+
+async function handleUpdateStatus(m){
+  if(m.error){ toast('Erro ao verificar: ' + m.error); return; }
+  if(m.upToDate){ toast('Você já está na versão mais recente'); return; }
+  const linhas = (m.log||[]).map(l=>'• '+l).join('\n');
+  const ok = await confirmDialog(
+    `Atualização disponível (${m.commits})`,
+    'Novidades:\n' + linhas,
+    'Atualizar agora'
+  );
+  if(!ok) return;
+  const card=$('#progCard'); $('#progList').innerHTML='';
+  $('#progTitle').textContent='Atualizando…';
+  card.querySelector('.spinner').style.display='block';
+  $('#backdrop').classList.add('show'); card.style.display='block';
+  wsSend({ type:'doUpdate' });
+}
+
+function onUpdateDone(m){
+  $('#progCard').querySelector('.spinner').style.display='none';
+  $('#progTitle').textContent='Atualizado!';
+  const l=document.createElement('div'); l.className='ok';
+  l.textContent = 'Pra aplicar: feche o terminal e rode "npm start" de novo.'
+    + (m.npmRan ? ' (dependências novas já instaladas)' : '');
+  $('#progList').appendChild(l);
+}
+function onUpdateError(m){
+  $('#progCard').querySelector('.spinner').style.display='none';
+  $('#progTitle').textContent='Falha ao atualizar';
+  const l=document.createElement('div'); l.className='warn'; l.textContent=m.message;
+  $('#progList').appendChild(l);
 }
 
 connectWS();

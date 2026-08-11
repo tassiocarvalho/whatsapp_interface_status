@@ -107,6 +107,28 @@ grupo → mídia → legenda → quantas vezes → postar.
 Depois de parear uma vez, a sessão fica salva em `auth_info_baileys/` e o
 bot reconecta sozinho — a tela já abre direto na lista de grupos.
 
+## Atualizar (quando sair uma versão nova)
+
+**Pelo app**: menu (⋮, na tela de grupos) → **Verificar atualizações**. Se
+tiver algo novo, mostra a lista de mudanças e um botão pra baixar
+(`git pull`, e `npm install` se precisar) sem precisar abrir terminal.
+
+**Pelo terminal**, na pasta do projeto (`whatsapp_interface_status`):
+
+```bash
+git pull
+npm install
+```
+
+Nos dois casos, depois reinicie o servidor pra aplicar: `Ctrl+C` no
+terminal pra parar o que já tava rodando e `npm start` de novo (o app não
+reinicia sozinho — evita deixar o servidor num estado quebrado no meio do
+processo). Mudança só em `public/index.html` já aparece se recarregar a
+página, sem precisar reiniciar.
+
+- **Não precisa parear de novo**: a sessão do WhatsApp (`auth_info_baileys/`)
+  não é controlada pelo Git, então atualizar nunca mexe nela.
+
 ---
 
 ## Estrutura

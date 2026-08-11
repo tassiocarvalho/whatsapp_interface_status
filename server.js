@@ -35,7 +35,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
-const { spawn, execSync } = require('child_process');
+const { spawn, execSync, exec } = require('child_process');
 
 process.on('uncaughtException', (err) => {
     if (err.code === 'ENOENT') return;
@@ -561,6 +561,65 @@ async function doLogout(ws) {
     try { await startSock(); } catch {}
 }
 
+// ─── ATUALIZAÇÕES (git pull) ───────────────────────────────────
+const execAsync = (cmd) => new Promise((resolve, reject) => {
+    exec(cmd, { cwd: __dirname }, (err, stdout, stderr) => {
+        if (err) reject(new Error((stderr || err.message).trim()));
+        else resolve(stdout.trim());
+    });
+});
+
+async function obterInfoAtualizacao() {
+    await execAsync('git fetch --quiet origin main');
+    const atual = await execAsync('git rev-parse HEAD');
+    const remoto = await execAsync('git rev-parse origin/main');
+    if (atual === remoto) return { upToDate: true, commits: 0, log: [] };
+    const log = (await execAsync('git log --oneline HEAD..origin/main')).split('\n').filter(Boolean);
+    return { upToDate: false, commits: log.length, log: log.slice(0, 8) };
+}
+
+async function checkUpdate(ws) {
+    try {
+        const info = await obterInfoAtualizacao();
+        updateCache = { ...info, checkedAt: Date.now() };
+        send(ws, { type: 'updateStatus', ...info });
+    } catch (e) {
+        send(ws, { type: 'updateStatus', error: e.message });
+    }
+}
+
+// checagem em segundo plano — evita bater no GitHub a cada tela aberta:
+// roda uma vez ao iniciar e depois só de X em X horas. Só avisa quem já
+// está conectado quando o status muda de "atualizado" pra "tem novidade".
+let updateCache = { upToDate: true, commits: 0, log: [], checkedAt: 0 };
+async function verificarAtualizacaoEmBackground() {
+    try {
+        const eraAtualizado = updateCache.upToDate;
+        const info = await obterInfoAtualizacao();
+        updateCache = { ...info, checkedAt: Date.now() };
+        if (!info.upToDate && eraAtualizado) {
+            broadcast({ type: 'updateAvailable', commits: info.commits, log: info.log });
+        }
+    } catch { /* checagem silenciosa — não incomoda o usuário se falhar */ }
+}
+const INTERVALO_CHECAGEM = 6 * 60 * 60 * 1000; // 6h
+
+async function doUpdate(ws) {
+    try {
+        send(ws, { type: 'updateStage', text: 'Baixando atualização (git pull)…' });
+        const saida = await execAsync('git pull --ff-only origin main');
+        let npmRan = false;
+        if (/package(-lock)?\.json/.test(saida)) {
+            send(ws, { type: 'updateStage', text: 'Instalando novas dependências…' });
+            await execAsync('npm install');
+            npmRan = true;
+        }
+        send(ws, { type: 'updateDone', npmRan });
+    } catch (e) {
+        send(ws, { type: 'updateError', message: e.message });
+    }
+}
+
 // ─── SERVIDOR ─────────────────────────────────────────────────
 const clients = new Set();
 const send = (ws, obj) => { try { ws.send(JSON.stringify(obj)); } catch {} };
@@ -638,6 +697,7 @@ const wss = new WebSocketServer({ server });
 wss.on('connection', (ws) => {
     clients.add(ws);
     send(ws, { type: 'status', ...latestStatus });
+    if (!updateCache.upToDate) send(ws, { type: 'updateAvailable', commits: updateCache.commits, log: updateCache.log });
     ws.on('close', () => clients.delete(ws));
     ws.on('message', (raw) => {
         let m; try { m = JSON.parse(raw); } catch { return; }
@@ -647,6 +707,8 @@ wss.on('connection', (ws) => {
         if (m.type === 'post') return doPost(ws, m);
         if (m.type === 'postText') return doPostText(ws, m);
         if (m.type === 'logout') return doLogout(ws);
+        if (m.type === 'checkUpdate') return checkUpdate(ws);
+        if (m.type === 'doUpdate') return doUpdate(ws);
     });
 });
 
@@ -655,3 +717,5 @@ server.listen(PORT, () => {
 });
 
 startSock();
+verificarAtualizacaoEmBackground();
+setInterval(verificarAtualizacaoEmBackground, INTERVALO_CHECAGEM);
