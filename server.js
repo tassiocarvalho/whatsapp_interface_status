@@ -257,6 +257,9 @@ function gerarThumbnailVideo(filePath) {
 }
 
 // ─── MÚSICA (corte + mistura na foto/vídeo) ────────────────────
+// Sample rate/canais forçados em 44.1kHz estéreo — sem isso o WhatsApp
+// às vezes aceita o vídeo mas fica mudo (mesmo problema resolvido antes
+// em converterVideoSeNecessario).
 function cortarAudio(filePath, inicio, fim) {
     const ffmpeg = resolverFfmpeg();
     if (!ffmpeg) return filePath;
@@ -264,11 +267,13 @@ function cortarAudio(filePath, inicio, fim) {
     const duracao = Math.max(0.5, fim - inicio);
     try {
         execSync(
-            `"${ffmpeg}" -y -ss ${inicio} -i "${filePath}" -t ${duracao} -vn -c:a aac -b:a 128k "${saida}"`,
-            { stdio: 'ignore', env: ffmpegEnv() }
+            `"${ffmpeg}" -y -ss ${inicio} -i "${filePath}" -t ${duracao} -vn -c:a aac -b:a 128k -ar 44100 -ac 2 "${saida}"`,
+            { stdio: ['ignore', 'ignore', 'pipe'], env: ffmpegEnv() }
         );
         if (fs.existsSync(saida) && fs.statSync(saida).size > 0) return saida;
-    } catch {}
+    } catch (e) {
+        console.log('❌ Corte de música falhou:', e.stderr?.toString().slice(-400) || e.message);
+    }
     return filePath;
 }
 
@@ -279,14 +284,22 @@ function fotoComMusica(fotoPath, musicaPath, duracaoSeg) {
     const saida = TMP_MIDIA + '_foto_musica.mp4';
     const args = [
         '-y', '-loop', '1', '-i', fotoPath, '-i', musicaPath,
+        '-map', '0:v:0', '-map', '1:a:0',
         '-t', String(duracaoSeg), '-vf', 'scale=-2:720', '-r', '30',
         '-c:v', 'libx264', '-profile:v', 'baseline', '-level', '3.1', '-pix_fmt', 'yuv420p',
-        '-c:a', 'aac', '-b:a', '128k', '-shortest', '-movflags', '+faststart', saida
+        '-c:a', 'aac', '-b:a', '128k', '-ar', '44100', '-ac', '2',
+        '-shortest', '-movflags', '+faststart', saida
     ];
     return new Promise((resolve) => {
-        const proc = spawn(ffmpeg, args, { env: ffmpegEnv(), stdio: 'ignore' });
-        proc.on('close', (code) => resolve(code === 0 && fs.existsSync(saida) && fs.statSync(saida).size > 0 ? saida : null));
-        proc.on('error', () => resolve(null));
+        const proc = spawn(ffmpeg, args, { env: ffmpegEnv(), stdio: ['ignore', 'ignore', 'pipe'] });
+        let erro = '';
+        proc.stderr.on('data', (d) => { erro += d; });
+        proc.on('close', (code) => {
+            const ok = code === 0 && fs.existsSync(saida) && fs.statSync(saida).size > 0;
+            if (!ok) console.log('❌ Mesclar foto+música falhou:', erro.slice(-400));
+            resolve(ok ? saida : null);
+        });
+        proc.on('error', (e) => { console.log('❌ Erro ffmpeg (foto+música):', e.message); resolve(null); });
     });
 }
 
@@ -298,13 +311,19 @@ function videoComMusica(videoPath, musicaPath) {
     const args = [
         '-y', '-i', videoPath, '-i', musicaPath,
         '-map', '0:v:0', '-map', '1:a:0',
-        '-c:v', 'copy', '-c:a', 'aac', '-b:a', '128k',
+        '-c:v', 'copy', '-c:a', 'aac', '-b:a', '128k', '-ar', '44100', '-ac', '2',
         '-shortest', '-movflags', '+faststart', saida
     ];
     return new Promise((resolve) => {
-        const proc = spawn(ffmpeg, args, { env: ffmpegEnv(), stdio: 'ignore' });
-        proc.on('close', (code) => resolve(code === 0 && fs.existsSync(saida) && fs.statSync(saida).size > 0 ? saida : null));
-        proc.on('error', () => resolve(null));
+        const proc = spawn(ffmpeg, args, { env: ffmpegEnv(), stdio: ['ignore', 'ignore', 'pipe'] });
+        let erro = '';
+        proc.stderr.on('data', (d) => { erro += d; });
+        proc.on('close', (code) => {
+            const ok = code === 0 && fs.existsSync(saida) && fs.statSync(saida).size > 0;
+            if (!ok) console.log('❌ Trocar áudio do vídeo falhou:', erro.slice(-400));
+            resolve(ok ? saida : null);
+        });
+        proc.on('error', (e) => { console.log('❌ Erro ffmpeg (vídeo+música):', e.message); resolve(null); });
     });
 }
 
