@@ -700,9 +700,38 @@ async function verificarAtualizacaoEmBackground() {
 }
 const INTERVALO_CHECAGEM = 6 * 60 * 60 * 1000; // 6h
 
+// arquivos que o próprio app/instalação regeneram sozinhos (não são código
+// editado por quem mantém o bot) — se só eles estiverem sujos, descarta antes
+// de atualizar em vez de travar o "git pull" pra todo mundo que os tocou.
+// legenda_status.txt: o README manda o usuário editar pra usar "legenda salva".
+// package-lock.json: muda sozinho a cada "npm install" (hash/deps por SO).
+const ARQUIVOS_REGENERAVEIS = ['legenda_status.txt', 'package-lock.json'];
+
+async function arquivosModificadosLocalmente() {
+    // não usa execAsync (dá .trim() na saída inteira): o "--porcelain" depende do
+    // espaço à esquerda de cada linha (" M arquivo") pra indicar status — um trim
+    // geral come esse espaço só na 1ª linha e corrompe o nome do 1º arquivo listado.
+    const saida = await new Promise((resolve, reject) => {
+        exec('git status --porcelain', { cwd: __dirname }, (err, stdout, stderr) => {
+            if (err) reject(new Error((stderr || err.message).trim()));
+            else resolve(stdout.replace(/\s+$/, ''));
+        });
+    });
+    return saida.split('\n').filter(Boolean)
+        .filter(l => !l.startsWith('??')) // não rastreado não trava o "git pull"
+        .map(l => l.slice(3).trim());
+}
+
 async function doUpdate(ws) {
     try {
         send(ws, { type: 'updateStage', text: 'Baixando atualização (git pull)…' });
+        const sujos = await arquivosModificadosLocalmente();
+        const bloqueantes = sujos.filter(f => !ARQUIVOS_REGENERAVEIS.includes(f));
+        if (bloqueantes.length) {
+            throw new Error(`Arquivos modificados localmente impedem a atualização: ${bloqueantes.join(', ')}. Salve ou descarte essas mudanças antes de atualizar.`);
+        }
+        if (sujos.length) await execAsync('git checkout -- ' + sujos.map(f => `"${f}"`).join(' '));
+
         const saida = await execAsync('git pull --ff-only origin main');
         let npmRan = false;
         if (/package(-lock)?\.json/.test(saida)) {
