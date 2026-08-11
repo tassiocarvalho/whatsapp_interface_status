@@ -3,18 +3,124 @@
 Bot de status de grupo do WhatsApp com interface web (estilo WhatsApp).
 O servidor Node segura a conexão do Baileys viva; o navegador é só a tela.
 
+Siga os passos abaixo em ordem — funciona no Termux (Android), Windows,
+Linux e macOS.
+
+## Passo 1 — Instalar o Git
+
+O Git é o programa que baixa (e depois atualiza) o projeto.
+
+- **Windows**: baixe em [git-scm.com](https://git-scm.com/download/win) e
+  instale (pode deixar tudo no padrão).
+- **Termux (Android)**:
+  ```bash
+  pkg update && pkg install git
+  ```
+- **Linux (Debian/Ubuntu)**:
+  ```bash
+  sudo apt update && sudo apt install git
+  ```
+- **macOS**:
+  ```bash
+  brew install git
+  ```
+
+Confira se instalou certo:
+
+```bash
+git --version
+```
+
+## Passo 2 — Baixar o projeto
+
+Abra o terminal (no Windows, o "Git Bash" que acabou de instalar; no Termux,
+o próprio app) numa pasta onde quer guardar o projeto, e rode:
+
+```bash
+git clone https://github.com/tassiocarvalho/whatsapp_interface_status.git
+cd whatsapp_interface_status
+```
+
+Isso cria a pasta `whatsapp_interface_status` com todo o código. **Todos os
+comandos dos próximos passos são rodados de dentro dela.**
+
+## Passo 3 — Instalar as dependências
+
+Tem um script que resolve tudo sozinho: instala Node.js e ffmpeg (se
+faltarem) e baixa as dependências do projeto (`npm install`).
+
+- **Termux / Linux / macOS**:
+  ```bash
+  bash setup.sh
+  ```
+- **Windows**: dê **duplo clique em `setup.bat`** (dentro da pasta do
+  projeto), ou pelo terminal:
+  ```powershell
+  .\setup.bat
+  ```
+  Se o Windows bloquear de primeira, clique em "Mais informações" →
+  "Executar assim mesmo" (o script só chama `winget` e `npm`, nada externo).
+  Se ele instalar o Node.js agora, feche o terminal, abra um novo e rode
+  `setup.bat` de novo — só assim o `PATH` atualiza.
+
+Espere terminar com a mensagem **"Tudo pronto!"**.
+
+<details>
+<summary>Prefere instalar na mão? (clique pra expandir)</summary>
+
+```bash
+# Node.js 20+: https://nodejs.org (baixe o instalador LTS)
+# ffmpeg (opcional, mas recomendado):
+#   Termux   → pkg install nodejs ffmpeg
+#   Windows  → winget install Gyan.FFmpeg
+#   Linux    → sudo apt install ffmpeg
+#   macOS    → brew install ffmpeg
+
+npm install
+```
+
+Um único `npm install` já baixa todas as dependências do `package.json`
+(`express`, `ws`, `multer`, `pino`, `@neoxr/baileys`) de uma vez.
+</details>
+
+## Passo 4 — Rodar
+
+```bash
+npm start
+```
+
+Depois abra no navegador (do próprio celular, se for usar no Termux):
+
+```
+http://localhost:3000
+```
+
+Nas próximas vezes, só repete este passo — não precisa rodar o `setup`
+de novo, a menos que apague a pasta `node_modules`.
+
+## Passo 5 — Parear com o WhatsApp
+
+Na tela: digitar número → gerar código → no celular, abrir WhatsApp em
+**Aparelhos conectados › Conectar com número** e digitar o código → escolher
+grupo → mídia → legenda → quantas vezes → postar.
+
+Depois de parear uma vez, a sessão fica salva em `auth_info_baileys/` e o
+bot reconecta sozinho — a tela já abre direto na lista de grupos.
+
+---
+
 ## Estrutura
 
 ```
-status-bot-web/
-├── server.js            → backend (Baileys + Express + WebSocket + upload)
+whatsapp_interface_status/
+├── server.js             → backend (Baileys + Express + WebSocket + upload)
 ├── package.json
-├── setup.sh              → instala tudo no Termux/Linux/macOS
-├── setup.bat / setup.ps1 → instala tudo no Windows
+├── setup.sh               → instala tudo no Termux/Linux/macOS
+├── setup.bat / setup.ps1  → instala tudo no Windows
 ├── public/
-│   └── index.html       → front-end (a interface)
-├── legenda_status.txt   → criado sozinho; edite pra usar "legenda salva"
-└── auth_info_baileys/   → criado sozinho após parear (sessão do WhatsApp)
+│   └── index.html        → front-end (a interface)
+├── legenda_status.txt    → criado sozinho; edite pra usar "legenda salva"
+└── auth_info_baileys/    → criado sozinho após parear (sessão do WhatsApp)
 ```
 
 ## Requisitos
@@ -25,75 +131,6 @@ status-bot-web/
   envia a mídia original sem converter (vídeo pode não reproduzir no status,
   imagem vai sem otimização).
 - Conta de WhatsApp pra parear (número com DDI + DDD).
-
-O repositório **não** inclui `node_modules/` nem a sessão do WhatsApp — por
-isso o `npm install` abaixo é obrigatório antes do primeiro `npm start`.
-
-## Instalar (uma vez)
-
-Tem um script que resolve tudo sozinho — instala Node/ffmpeg que faltar e
-já roda o `npm install`. Depois disso é só `npm start` pra sempre.
-
-### Termux (Android) / Linux / macOS
-
-De preferência instale o Termux pela F-Droid, não pela Play Store.
-
-```bash
-cd status-bot-web
-bash setup.sh
-```
-
-### Windows
-
-Dê **duplo clique em `setup.bat`** (na pasta do projeto), ou pelo terminal:
-
-```powershell
-cd status-bot-web
-.\setup.bat
-```
-
-Se o Windows bloquear o `.bat` de primeira, clique em "Mais informações" →
-"Executar assim mesmo" (é só o script chamando winget e npm, nada externo).
-
-Se o script instalar o Node.js agora (máquina sem Node), feche o terminal,
-abra um novo e rode `setup.bat` de novo — só assim o `PATH` atualiza.
-
-### Manual (sem os scripts)
-
-```bash
-# Node.js 20+: https://nodejs.org (baixe o instalador LTS)
-# ffmpeg (opcional):
-#   Termux   → pkg install nodejs ffmpeg
-#   Windows  → winget install Gyan.FFmpeg
-#   Linux    → sudo apt install ffmpeg  (ou o gerenciador da sua distro)
-#   macOS    → brew install ffmpeg
-
-cd status-bot-web
-npm install
-```
-
-Um único `npm install` já baixa todas as dependências de uma vez (lê o
-`package.json`): `express`, `ws`, `multer`, `pino` e `@neoxr/baileys` (o
-Baileys, que fala com o WhatsApp) — nenhuma precisa ser instalada à parte.
-
-## Rodar
-
-```bash
-npm start
-```
-
-Depois abra no navegador do próprio celular:
-
-```
-http://localhost:3000
-```
-
-Fluxo na tela: digitar número → gerar código → parear no WhatsApp
-(Aparelhos conectados › Conectar com número) → escolher grupo → mídia →
-legenda → quantas vezes → postar.
-
-Depois de parear uma vez, a sessão fica salva em `auth_info_baileys/` e
-reconecta sozinho — a tela já abre direto na lista de grupos.
 
 ## Deixar com "cara de app" (opcional)
 
