@@ -394,18 +394,14 @@ async function enviarComRetry(sock, groupId, conteudo, opts, tentativas, onRetry
 // ─── POSTAR STATUS ────────────────────────────────────────────
 // conteudo já pronto pro sendMessage (imagem/vídeo/texto); opts carrega
 // coisas como backgroundColor (status de texto).
-async function postarStatus(sock, groupId, conteudo, opts, vezes, onEvent) {
-    for (let i = 0; i < vezes; i++) {
-        try {
-            await enviarComRetry(sock, groupId, conteudo, opts, 4,
-                (t, tot, m) => onEvent && onEvent({ type: 'retry', current: i + 1, total: vezes, attempt: t, attempts: tot, message: m }));
-            console.log(`✅ Status ${i + 1}/${vezes} postado!`);
-            if (onEvent) onEvent({ type: 'progress', current: i + 1, total: vezes });
-        } catch (e) {
-            console.log(`❌ Erro ao postar status ${i + 1}/${vezes} (após retries): ${e.message}`);
-            if (onEvent) onEvent({ type: 'postItemError', current: i + 1, total: vezes, message: e.message });
-        }
-        if (vezes > 1 && i < vezes - 1) await delay(800);
+async function postarStatus(sock, groupId, conteudo, opts, onEvent) {
+    try {
+        await enviarComRetry(sock, groupId, conteudo, opts, 4,
+            (t, tot, m) => onEvent && onEvent({ type: 'retry', attempt: t, attempts: tot, message: m }));
+        console.log('✅ Status postado!');
+    } catch (e) {
+        console.log(`❌ Erro ao postar status (após retries): ${e.message}`);
+        throw e;
     }
 }
 
@@ -540,7 +536,7 @@ function loadSavedCaption(ws) {
     send(ws, { type: 'savedCaption', text });
 }
 
-async function doPost(ws, { uploadId, groupId, caption, times, musicUploadId, musicStart, musicEnd }) {
+async function doPost(ws, { uploadId, groupId, caption, musicUploadId, musicStart, musicEnd }) {
     const filePath = uploads.get(uploadId);
     if (!filePath || !fs.existsSync(filePath)) {
         send(ws, { type: 'postError', message: 'Arquivo não encontrado no servidor.' });
@@ -562,7 +558,8 @@ async function doPost(ws, { uploadId, groupId, caption, times, musicUploadId, mu
         if (musicPath && fs.existsSync(musicPath)) {
             emit({ type: 'stage', text: 'Cortando o trecho da música…' });
             const inicio = Math.max(0, parseFloat(musicStart) || 0);
-            const fim = Math.max(inicio + 0.5, parseFloat(musicEnd) || inicio + 5);
+            let fim = Math.max(inicio + 2, parseFloat(musicEnd) || inicio + 5);
+            fim = Math.min(fim, inicio + 30); // trecho: mínimo 2s, máximo 30s
             const trecho = cortarAudio(musicPath, inicio, fim);
             emit({ type: 'stage', text: 'Misturando música na mídia…' });
             if (tipo === 'imagem') {
@@ -577,14 +574,13 @@ async function doPost(ws, { uploadId, groupId, caption, times, musicUploadId, mu
         }
 
         emit({ type: 'stage', text: 'Enviando para o WhatsApp…' });
-        const n = Math.max(1, parseInt(times) || 1);
         const mime = getMime(arquivoFinal, tipo);
         const buffer = fs.readFileSync(arquivoFinal);
         const conteudo = tipo === 'imagem'
             ? { image: buffer, caption: caption || '', mimetype: mime, groupStatus: true }
             : { video: buffer, caption: caption || '', mimetype: 'video/mp4', groupStatus: true, ...(thumb ? { jpegThumbnail: thumb } : {}) };
-        await postarStatus(sock, groupId, conteudo, {}, n, emit);
-        send(ws, { type: 'postDone', total: n });
+        await postarStatus(sock, groupId, conteudo, {}, emit);
+        send(ws, { type: 'postDone' });
     } catch (e) {
         send(ws, { type: 'postError', message: e.message });
     } finally {
@@ -597,7 +593,7 @@ async function doPost(ws, { uploadId, groupId, caption, times, musicUploadId, mu
     }
 }
 
-async function doPostText(ws, { groupId, text, backgroundColor, times }) {
+async function doPostText(ws, { groupId, text, backgroundColor }) {
     const texto = (text || '').trim();
     if (!texto) {
         send(ws, { type: 'postError', message: 'Escreva algum texto pro status.' });
@@ -606,11 +602,10 @@ async function doPostText(ws, { groupId, text, backgroundColor, times }) {
     try {
         const emit = (obj) => send(ws, obj);
         emit({ type: 'stage', text: 'Enviando para o WhatsApp…' });
-        const n = Math.max(1, parseInt(times) || 1);
         const conteudo = { text: texto, groupStatus: true };
         const opts = backgroundColor ? { backgroundColor } : {};
-        await postarStatus(sock, groupId, conteudo, opts, n, emit);
-        send(ws, { type: 'postDone', total: n });
+        await postarStatus(sock, groupId, conteudo, opts, emit);
+        send(ws, { type: 'postDone' });
     } catch (e) {
         send(ws, { type: 'postError', message: e.message });
     }

@@ -129,6 +129,20 @@ página, sem precisar reiniciar.
 - **Não precisa parear de novo**: a sessão do WhatsApp (`auth_info_baileys/`)
   não é controlada pelo Git, então atualizar nunca mexe nela.
 
+### Deu erro "Falha ao atualizar" / "local changes... would be overwritten by merge"
+
+Só acontece em instalações baixadas antes de 12/08/2026. Rode uma vez no
+terminal, na pasta do projeto:
+
+```bash
+git checkout -- package-lock.json
+git pull
+npm install
+```
+
+Depois disso o problema não volta mais — daí em diante o próprio botão
+"Verificar atualizações" resolve esse tipo de conflito sozinho.
+
 ---
 
 ## Estrutura

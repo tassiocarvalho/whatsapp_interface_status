@@ -203,17 +203,6 @@
   }
   .trim-labels{display:flex; align-items:center; justify-content:space-between; font-size:12.5px; color:var(--txt2);}
 
-  .stepper-row{display:flex; align-items:center; justify-content:space-between; background:var(--panel); border-radius:14px; padding:14px 16px;}
-  .stepper-row .lbl{font-size:15px;}
-  .stepper-row .lbl small{display:block; color:var(--txt2); font-size:12px; margin-top:2px;}
-  .stepper{display:flex; align-items:center; gap:16px;}
-  .stepper button{
-    width:36px; height:36px; border-radius:50%; border:none; background:var(--field);
-    color:var(--txt); font-size:20px; cursor:pointer; display:flex; align-items:center; justify-content:center;
-  }
-  .stepper button:active{background:var(--green); color:#04231c;}
-  .stepper .val{font-size:18px; font-weight:600; min-width:22px; text-align:center;}
-
   .fab{
     position:absolute; right:18px; bottom:calc(18px + env(safe-area-inset-bottom));
     width:60px; height:60px; border-radius:50%; border:none; background:var(--green);
@@ -429,15 +418,6 @@
           <span id="trimEndLbl">0:30</span>
         </div>
       </div>
-
-      <div class="stepper-row" id="timesRow" style="display:none;">
-        <div class="lbl">Postar quantas vezes<small>Repete o mesmo status em sequência</small></div>
-        <div class="stepper">
-          <button id="minus">−</button>
-          <span class="val" id="timesVal">1</span>
-          <button id="plus">+</button>
-        </div>
-      </div>
     </div>
 
     <button class="fab" id="sendFab" disabled>
@@ -463,15 +443,6 @@
       </div>
 
       <div class="swatches" id="colorSwatches"></div>
-
-      <div class="stepper-row" id="timesRowText">
-        <div class="lbl">Postar quantas vezes<small>Repete o mesmo status em sequência</small></div>
-        <div class="stepper">
-          <button id="minusText">−</button>
-          <span class="val" id="timesValText">1</span>
-          <button id="plusText">+</button>
-        </div>
-      </div>
     </div>
 
     <button class="fab" id="sendFabText" disabled>
@@ -539,7 +510,6 @@
     <div class="sum"><span>Grupo</span><span id="sGroup"></span></div>
     <div class="sum"><span>Mídia</span><span id="sMedia"></span></div>
     <div class="sum"><span>Tipo</span><span id="sType"></span></div>
-    <div class="sum"><span>Vezes</span><span id="sTimes"></span></div>
     <div class="sum"><span>Legenda</span><span id="sCap"></span></div>
     <div class="sum" id="sMusicRow" style="display:none;"><span>Música</span><span id="sMusic"></span></div>
     <div class="sheet-actions">
@@ -583,9 +553,7 @@ function route(m){
     case 'pairingError':  resolveWaiters('pairing', null); toast('Erro: ' + m.message); break;
     case 'groups':        resolveWaiters('groups', m.groups); break;
     case 'savedCaption':  resolveWaiters('caption', m.text); break;
-    case 'progress':      pendingPost && pendingPost.onProgress(m.current, m.total); break;
-    case 'retry':
-    case 'postItemError': pendingPost && pendingPost.onRetry && pendingPost.onRetry(m); break;
+    case 'retry':         pendingPost && pendingPost.onRetry && pendingPost.onRetry(m); break;
     case 'postDone':      if(pendingPost){ pendingPost.resolve(); pendingPost = null; } break;
     case 'postError':     if(pendingPost){ pendingPost.reject(new Error(m.message)); pendingPost = null; } toast('Erro: ' + m.message); break;
     case 'loggedOut':     onLoggedOut(); break;
@@ -640,21 +608,21 @@ const api = {
   waitConnection(){ return connOpen ? Promise.resolve() : waitFor('open'); },
   fetchGroups(){ wsSend({ type:'fetchGroups' }); return waitFor('groups'); },
   loadSavedCaption(){ wsSend({ type:'loadSavedCaption' }); return waitFor('caption'); },
-  async postStatus({ file, groupId, caption, times, music }, onProgress, onRetry){
+  async postStatus({ file, groupId, caption, music }, onRetry){
     const form = new FormData(); form.append('media', file);
     const up = await fetch('/upload', { method:'POST', body:form });
     if(!up.ok) throw new Error('upload falhou');
     const { uploadId } = await up.json();
     return new Promise((resolve, reject) => {
-      pendingPost = { onProgress, onRetry, resolve, reject };
-      wsSend({ type:'post', uploadId, groupId, caption, times,
+      pendingPost = { onRetry, resolve, reject };
+      wsSend({ type:'post', uploadId, groupId, caption,
         musicUploadId: music?.uploadId, musicStart: music?.start, musicEnd: music?.end });
     });
   },
-  postTextStatus({ groupId, text, backgroundColor, times }, onProgress, onRetry){
+  postTextStatus({ groupId, text, backgroundColor }, onRetry){
     return new Promise((resolve, reject) => {
-      pendingPost = { onProgress, onRetry, resolve, reject };
-      wsSend({ type:'postText', groupId, text, backgroundColor, times });
+      pendingPost = { onRetry, resolve, reject };
+      wsSend({ type:'postText', groupId, text, backgroundColor });
     });
   },
   async uploadMp3(file){
@@ -678,7 +646,7 @@ const api = {
 };
 
 /* ── UI ── */
-const state = { group:null, mode:null, file:null, type:null, times:1, bgColor:null, music:null };
+const state = { group:null, mode:null, file:null, type:null, bgColor:null, music:null };
 const TEXT_COLORS = ['#4A76FD','#EB5757','#25D366','#F2994A','#9B51E0','#00B8D9','#EC4899','#2D2D2D'];
 const palette = ['#0a927b','#8b5cf6','#e0803a','#3d7ce0','#c0518f','#5aa02c','#c94f4f','#0f8bb0'];
 const colorFor = s => palette[[...s].reduce((a,c)=>a+c.charCodeAt(0),0)%palette.length];
@@ -771,7 +739,7 @@ function closeTypeSheet(){
 }
 $('#pickMedia').onclick=()=>{
   closeTypeSheet();
-  state.mode='media'; state.file=null; state.type=null; state.times=1;
+  state.mode='media'; state.file=null; state.type=null;
   $('#cGroupName').textContent=state.group.subject;
   $('#cAvatarWrap').innerHTML=avatarHtml(state.group,'width:40px;height:40px;font-size:15px;');
   resetCompose();
@@ -779,7 +747,7 @@ $('#pickMedia').onclick=()=>{
 };
 $('#pickText').onclick=()=>{
   closeTypeSheet();
-  state.mode='texto'; state.times=1; state.bgColor=TEXT_COLORS[0];
+  state.mode='texto'; state.bgColor=TEXT_COLORS[0];
   $('#tGroupName').textContent=state.group.subject;
   $('#tAvatarWrap').innerHTML=avatarHtml(state.group,'width:40px;height:40px;font-size:15px;');
   resetComposeText();
@@ -790,8 +758,7 @@ function resetCompose(){
   $('#capWrap').style.display='none';
   $('#savedCap').style.display='none';
   $('#addMusicChip').style.display='none';
-  $('#timesRow').style.display='none';
-  $('#caption').value=''; $('#timesVal').textContent='1'; state.times=1;
+  $('#caption').value='';
   $('#sendFab').disabled=true;
   const old=$('#previewBox'); if(old) old.remove();
   clearMusic();
@@ -822,7 +789,6 @@ $('#fileInput').onchange=e=>{
   $('#capWrap').style.display='flex';
   $('#savedCap').style.display='block';
   $('#addMusicChip').style.display='block';
-  $('#timesRow').style.display='flex';
   $('#sendFab').disabled=false;
 };
 
@@ -835,9 +801,6 @@ $('#savedCap').onclick=async()=>{
 
 const cap=$('#caption');
 cap.addEventListener('input',()=>{ cap.style.height='auto'; cap.style.height=Math.min(cap.scrollHeight,110)+'px'; });
-
-$('#plus').onclick=()=>{ state.times++; $('#timesVal').textContent=state.times; };
-$('#minus').onclick=()=>{ if(state.times>1){ state.times--; $('#timesVal').textContent=state.times; } };
 
 /* ── música ── */
 function fmtTime(s){ s=Math.max(0,Math.round(s)); return Math.floor(s/60)+':'+String(s%60).padStart(2,'0'); }
@@ -862,18 +825,30 @@ function setMusic({ uploadId, name, artist, artwork, playSrc, duration }){
   };
   $('#musicTrim').style.display='flex';
 }
+// trecho da música: entre MIN_TRECHO e MAX_TRECHO segundos — o usuário escolhe
+// o tamanho exato dentro desse intervalo, não é sempre fixo em 30s.
+const MIN_TRECHO = 2, MAX_TRECHO = 30;
 $('#trimStart').oninput=()=>{
   if(!state.music) return;
-  const dur=parseFloat($('#trimStart').max)||30;
-  const v=Math.max(0, Math.min(parseFloat($('#trimStart').value), dur-1));
-  state.music.start=v; state.music.end=Math.min(dur, v+30);
-  $('#trimStart').value=v; $('#trimEnd').value=state.music.end; updateTrimLabels();
+  const dur=parseFloat($('#trimStart').max)||MAX_TRECHO;
+  const v=Math.max(0, Math.min(parseFloat($('#trimStart').value), dur-MIN_TRECHO));
+  let end=state.music.end;
+  if(end-v>MAX_TRECHO) end=v+MAX_TRECHO;
+  if(end-v<MIN_TRECHO) end=v+MIN_TRECHO;
+  end=Math.min(end, dur);
+  state.music.start=v; state.music.end=end;
+  $('#trimStart').value=v; $('#trimEnd').value=end; updateTrimLabels();
 };
 $('#trimEnd').oninput=()=>{
   if(!state.music) return;
-  const v=Math.max(parseFloat($('#trimEnd').value), 1);
-  state.music.end=v; state.music.start=Math.max(0, v-30);
-  $('#trimStart').value=state.music.start; $('#trimEnd').value=v; updateTrimLabels();
+  const dur=parseFloat($('#trimEnd').max)||MAX_TRECHO;
+  const v=Math.min(dur, Math.max(MIN_TRECHO, parseFloat($('#trimEnd').value)));
+  let start=state.music.start;
+  if(v-start>MAX_TRECHO) start=v-MAX_TRECHO;
+  if(v-start<MIN_TRECHO) start=v-MIN_TRECHO;
+  start=Math.max(0, start);
+  state.music.start=start; state.music.end=v;
+  $('#trimStart').value=start; $('#trimEnd').value=v; updateTrimLabels();
 };
 $('#previewMusic').onclick=()=>{
   if(!state.music) return;
@@ -963,7 +938,6 @@ async function selectYoutubeTrack(t){
 /* ── status de texto ── */
 function resetComposeText(){
   $('#statusText').value='';
-  $('#timesValText').textContent='1';
   $('#sendFabText').disabled=true;
   $('#textPreview').style.background=state.bgColor;
   renderColorSwatches();
@@ -982,9 +956,6 @@ $('#backComposeText').onclick=()=>go('groups');
 $('#statusText').addEventListener('input',()=>{
   $('#sendFabText').disabled = !$('#statusText').value.trim();
 });
-$('#plusText').onclick=()=>{ state.times++; $('#timesValText').textContent=state.times; };
-$('#minusText').onclick=()=>{ if(state.times>1){ state.times--; $('#timesValText').textContent=state.times; } };
-
 function openSheet(){
   $('#sGroup').textContent=state.group.subject;
   if(state.mode==='texto'){
@@ -996,7 +967,6 @@ function openSheet(){
     $('#sType').textContent=state.type;
     $('#sCap').textContent=cap.value.trim()||'(sem legenda)';
   }
-  $('#sTimes').textContent=state.times;
   if(state.mode!=='texto' && state.music){
     $('#sMusicRow').style.display='flex';
     $('#sMusic').textContent=`${state.music.name||'música'} (${fmtTime(state.music.start)}–${fmtTime(state.music.end)})`;
@@ -1028,36 +998,28 @@ $('#confirmSend').onclick=async()=>{
   list.innerHTML=''; $('#progTitle').textContent='Enviando…'; spin.style.display='block';
   $('#backdrop').classList.add('show'); card.style.display='block';
 
-  const onProgress=(i,total)=>{
-    $('#progTitle').textContent='Postando status…';
-    const l=document.createElement('div'); l.className='ok';
-    l.textContent=`✅ Status ${i}/${total} postado`;
-    list.appendChild(l); list.scrollTop=list.scrollHeight;
-  };
   const onRetry=(ev)=>{
     const l=document.createElement('div'); l.className='warn';
-    l.textContent = ev.type==='retry'
-      ? `↻ Reenviando ${ev.current}/${ev.total} (tentativa ${ev.attempt}/${ev.attempts})`
-      : `⚠️ Falhou ${ev.current}/${ev.total}`;
+    l.textContent = `↻ Reenviando (tentativa ${ev.attempt}/${ev.attempts})`;
     list.appendChild(l); list.scrollTop=list.scrollHeight;
   };
 
   try{
     if(state.mode==='texto'){
       await api.postTextStatus(
-        { groupId:state.group.id, text:$('#statusText').value.trim(), backgroundColor:state.bgColor, times:state.times },
-        onProgress, onRetry
+        { groupId:state.group.id, text:$('#statusText').value.trim(), backgroundColor:state.bgColor },
+        onRetry
       );
     } else {
       await api.postStatus(
-        { file:state.file, groupId:state.group.id, caption:cap.value.trim(), times:state.times, music:state.music },
-        onProgress, onRetry
+        { file:state.file, groupId:state.group.id, caption:cap.value.trim(), music:state.music },
+        onRetry
       );
     }
     $('#progTitle').textContent='Concluído'; spin.style.display='none';
     await delay(700);
     card.style.display='none'; $('#backdrop').classList.remove('show');
-    toast(state.times>1?`${state.times} status postados`:'Status postado');
+    toast('Status postado');
     if(state.mode==='texto') resetComposeText(); else resetCompose();
   }catch(e){
     spin.style.display='none'; $('#progTitle').textContent='Falha ao postar';
