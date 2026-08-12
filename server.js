@@ -427,7 +427,10 @@ async function startSock() {
     sock = makeWASocket({
         version,
         auth: state,
-        logger: pino({ level: 'silent' }),
+        // 'silent' escondia até falhas reais de envio (ex.: criptografia por
+        // dispositivo falhando ao postar pra grupos grandes) — 'error' deixa
+        // esses casos aparecerem; o filtro RUIDO acima já limpa o ruído interno.
+        logger: pino({ level: 'error' }),
         printQRInTerminal: false,
         browser: ["Ubuntu", "Chrome", "20.0.04"],
         markOnlineOnConnect: true,
