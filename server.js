@@ -24,7 +24,7 @@ const _err = console.error.bind(console);
 console.error = (...a) => { if (!ehRuido(a.join(' '))) _err(...a); };
 
 // ─── DEPENDÊNCIAS ─────────────────────────────────────────────
-let makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, jidNormalizedUser;
+let makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, jidNormalizedUser, generateWAMessage, generateMessageIDV2;
 
 const express = require('express');
 const { WebSocketServer } = require('ws');
@@ -373,11 +373,42 @@ function videoComMusica(videoPath, musicaPath) {
     });
 }
 
+// ─── STATUS DE GRUPO (envelope V1, não V2) ─────────────────────
+// `sock.sendMessage(groupId, { ...conteudo, groupStatus: true })` embrulha
+// SEMPRE em `groupStatusMessageV2` (Utils/messages.js da lib) — não tem opção
+// pra pedir o V1. V2 é um tipo bem mais novo no protocolo (campo 103 contra
+// 96 do V1), então menos apps WhatsApp por aí sabem exibir ele — em grupos
+// grandes (mais gente com o app desatualizado), isso aparece como uma
+// mensagem de "não é possível exibir" direto no chat do grupo em vez do
+// status funcionar. Aqui a gente deixa a lib montar a mensagem normalmente
+// (reaproveita upload de mídia, miniatura, criptografia — tudo testado) e só
+// troca a última etapa: em vez de `groupStatusMessageV2`, envia como
+// `groupStatusMessage` (V1), que é mais antigo e mais amplamente suportado.
+const _msgBuilderLogger = pino({ level: 'error' });
+async function enviarStatusGrupo(sock, groupId, conteudo, opts) {
+    const meId = sock.user?.id;
+    // a lib apaga `conteudo.groupStatus` depois de usar (Utils/messages.js) — como o
+    // retry reusa este mesmo objeto, sem clonar aqui uma tentativa que falhar faria a
+    // próxima ir sem o embrulho de status, vazando a mídia como mensagem normal no grupo.
+    const fullMsg = await generateWAMessage(groupId, { ...conteudo }, {
+        logger: _msgBuilderLogger,
+        userJid: meId,
+        upload: sock.waUploadToServer,
+        messageId: generateMessageIDV2(meId),
+        ...opts
+    });
+    if (fullMsg.message.groupStatusMessageV2) {
+        fullMsg.message.groupStatusMessage = fullMsg.message.groupStatusMessageV2;
+        delete fullMsg.message.groupStatusMessageV2;
+    }
+    await sock.relayMessage(groupId, fullMsg.message, { messageId: fullMsg.key.id });
+}
+
 // ─── ENVIO COM RETRY ──────────────────────────────────────────
 async function enviarComRetry(sock, groupId, conteudo, opts, tentativas, onRetry) {
     for (let t = 1; t <= tentativas; t++) {
         try {
-            await sock.sendMessage(groupId, conteudo, opts);
+            await enviarStatusGrupo(sock, groupId, conteudo, opts);
             return true;
         } catch (e) {
             const msg = e?.message || String(e);
@@ -418,6 +449,8 @@ async function startSock() {
         DisconnectReason = baileys.DisconnectReason;
         fetchLatestBaileysVersion = baileys.fetchLatestBaileysVersion;
         jidNormalizedUser = baileys.jidNormalizedUser;
+        generateWAMessage = baileys.generateWAMessage;
+        generateMessageIDV2 = baileys.generateMessageIDV2;
     }
 
     const { state, saveCreds } = await useMultiFileAuthState('./auth_info_baileys');
