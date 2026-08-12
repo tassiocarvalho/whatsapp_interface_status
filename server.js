@@ -24,7 +24,7 @@ const _err = console.error.bind(console);
 console.error = (...a) => { if (!ehRuido(a.join(' '))) _err(...a); };
 
 // ─── DEPENDÊNCIAS ─────────────────────────────────────────────
-let makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, jidNormalizedUser;
+let makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, jidNormalizedUser, BufferJSON;
 
 const express = require('express');
 const { WebSocketServer } = require('ws');
@@ -373,6 +373,67 @@ function videoComMusica(videoPath, musicaPath) {
     });
 }
 
+// ─── ARQUIVO DE MENSAGENS ENVIADAS (reenvio sob demanda) ───────
+// Quando alguém não consegue descriptografar um status, o celular da pessoa
+// pede o reenvio pro bot ("retry receipt") — é a autocorreção do próprio
+// WhatsApp. Pra atender esse pedido a lib precisa achar a mensagem original:
+// ela procura no cache interno (que só guarda 5 min) e, se não achar, chama
+// `getMessage` — cujo padrão é devolver nada (Defaults/index.js da lib).
+// Sem isso, quem abriu o status depois de 5 min do envio nunca recebe a
+// resposta e fica com a tela preta pra sempre. Guardando em disco, o pedido
+// é atendido mesmo horas depois e mesmo se o servidor tiver reiniciado.
+const ARQUIVO_MENSAGENS = './mensagens_enviadas.json';
+const VALIDADE_MENSAGEM = 48 * 60 * 60 * 1000; // 48h
+let mensagensEnviadas = new Map();
+
+function carregarMensagens() {
+    try {
+        const bruto = fs.readFileSync(ARQUIVO_MENSAGENS, 'utf8');
+        // BufferJSON: a mensagem tem campos binários (chave da mídia, miniatura)
+        // que viram objeto comum num JSON.parse normal e quebram o reenvio.
+        const dados = JSON.parse(bruto, BufferJSON.reviver);
+        const agora = Date.now();
+        for (const [chave, item] of Object.entries(dados)) {
+            if (agora - item.ts < VALIDADE_MENSAGEM) mensagensEnviadas.set(chave, item);
+        }
+        console.log(`📦 ${mensagensEnviadas.size} status recentes carregados (pra reenvio se alguém não conseguir abrir).`);
+    } catch { /* primeira execução ou arquivo inválido — começa vazio */ }
+}
+
+let gravacaoPendente = null;
+function salvarMensagens() {
+    // agrupa gravações: postar dispara várias escritas seguidas
+    if (gravacaoPendente) return;
+    gravacaoPendente = setTimeout(() => {
+        gravacaoPendente = null;
+        try {
+            const agora = Date.now();
+            const obj = {};
+            for (const [chave, item] of mensagensEnviadas) {
+                if (agora - item.ts < VALIDADE_MENSAGEM) obj[chave] = item;
+            }
+            fs.writeFileSync(ARQUIVO_MENSAGENS, JSON.stringify(obj, BufferJSON.replacer));
+        } catch (e) { console.log('⚠️  Não consegui salvar o histórico de status:', e.message); }
+    }, 1000);
+}
+
+function guardarMensagem(groupId, msgId, message) {
+    if (!msgId || !message) return;
+    const agora = Date.now();
+    for (const [chave, item] of mensagensEnviadas) {
+        if (agora - item.ts >= VALIDADE_MENSAGEM) mensagensEnviadas.delete(chave);
+    }
+    mensagensEnviadas.set(`${groupId}:${msgId}`, { ts: agora, message });
+    salvarMensagens();
+}
+
+// chamada pela lib quando chega um pedido de reenvio
+async function recuperarMensagem(key) {
+    const item = mensagensEnviadas.get(`${key.remoteJid}:${key.id}`);
+    if (item) console.log(`🔁 Reenviando status pra quem não conseguiu abrir (${key.remoteJid}).`);
+    return item?.message;
+}
+
 // ─── ENVIO COM RETRY ──────────────────────────────────────────
 async function enviarComRetry(sock, groupId, conteudo, opts, tentativas, onRetry) {
     for (let t = 1; t <= tentativas; t++) {
@@ -380,7 +441,8 @@ async function enviarComRetry(sock, groupId, conteudo, opts, tentativas, onRetry
             // clona: a lib apaga `conteudo.groupStatus` depois de usar (Utils/messages.js
             // da lib) — sem clonar, uma tentativa que falhasse faria a próxima ir sem o
             // embrulho de status, vazando a mídia como mensagem normal no grupo.
-            await sock.sendMessage(groupId, { ...conteudo }, opts);
+            const enviada = await sock.sendMessage(groupId, { ...conteudo }, opts);
+            guardarMensagem(groupId, enviada?.key?.id, enviada?.message);
             return true;
         } catch (e) {
             const msg = e?.message || String(e);
@@ -394,11 +456,36 @@ async function enviarComRetry(sock, groupId, conteudo, opts, tentativas, onRetry
     return false;
 }
 
+// ─── REDISTRIBUIR A CHAVE DE CRIPTOGRAFIA DO GRUPO ─────────────
+// A lib guarda um "já mandei a chave pra esse aparelho" por grupo
+// (sender-key-memory) e, uma vez marcado, nunca mais reenvia num envio
+// normal. O problema: se a pessoa reinstalou o WhatsApp, trocou de celular
+// ou a sessão dela resetou, o aparelho perdeu a chave — mas continua
+// marcado como "já tem". Resultado: tela preta, e o bot não tem como saber.
+// Quanto maior o grupo e mais tempo de uso, mais aparelhos nessa situação.
+// Limpar essa marcação antes de postar força o reenvio da chave pra todo
+// mundo. É exatamente o que a própria lib faz quando recebe um pedido de
+// reenvio (Socket/messages-recv.js), então é operação prevista — só que
+// aqui a gente faz antes, em vez de esperar dar errado.
+// Custo: o envio fica mais pesado/lento em grupo grande (a chave vai
+// cifrada pra cada aparelho). Vale a troca num status, que é pontual.
+const REDISTRIBUIR_CHAVE = true;
+async function redistribuirChaveGrupo(sock, groupId) {
+    if (!REDISTRIBUIR_CHAVE) return;
+    try {
+        await sock.authState.keys.set({ 'sender-key-memory': { [groupId]: null } });
+        console.log('🔑 Chave de criptografia será reenviada pra todos os aparelhos do grupo.');
+    } catch (e) {
+        console.log('⚠️  Não consegui redistribuir a chave do grupo:', e.message);
+    }
+}
+
 // ─── POSTAR STATUS ────────────────────────────────────────────
 // conteudo já pronto pro sendMessage (imagem/vídeo/texto); opts carrega
 // coisas como backgroundColor (status de texto).
 async function postarStatus(sock, groupId, conteudo, opts, onEvent) {
     try {
+        await redistribuirChaveGrupo(sock, groupId);
         await enviarComRetry(sock, groupId, conteudo, opts, 4,
             (t, tot, m) => onEvent && onEvent({ type: 'retry', attempt: t, attempts: tot, message: m }));
         console.log('✅ Status postado!');
@@ -407,6 +494,22 @@ async function postarStatus(sock, groupId, conteudo, opts, onEvent) {
         throw e;
     }
 }
+
+// ─── CACHE DE METADADOS DO GRUPO ──────────────────────────────
+// Invalidado quando alguém entra/sai ou o grupo muda, então não corre risco
+// de mandar pra uma lista desatualizada de participantes.
+const VALIDADE_METADADOS = 5 * 60 * 1000;
+const metadadosCache = new Map();
+function guardarMetadados(jid, dados) {
+    if (dados?.participants?.length) metadadosCache.set(jid, { ts: Date.now(), dados });
+}
+function invalidarMetadados(jid) { metadadosCache.delete(jid); }
+setInterval(() => {
+    const agora = Date.now();
+    for (const [jid, item] of metadadosCache) {
+        if (agora - item.ts >= VALIDADE_METADADOS) metadadosCache.delete(jid);
+    }
+}, 60 * 1000).unref();
 
 // ─── BAILEYS ──────────────────────────────────────────────────
 let sock = null;
@@ -421,6 +524,8 @@ async function startSock() {
         DisconnectReason = baileys.DisconnectReason;
         fetchLatestBaileysVersion = baileys.fetchLatestBaileysVersion;
         jidNormalizedUser = baileys.jidNormalizedUser;
+        BufferJSON = baileys.BufferJSON;
+        carregarMensagens();
     }
 
     const { state, saveCreds } = await useMultiFileAuthState('./auth_info_baileys');
@@ -434,6 +539,13 @@ async function startSock() {
         // dispositivo falhando ao postar pra grupos grandes) — 'error' deixa
         // esses casos aparecerem; o filtro RUIDO acima já limpa o ruído interno.
         logger: pino({ level: 'error' }),
+        // atende o pedido de reenvio de quem não conseguiu abrir o status
+        // (sem isso a lib devolve vazio e a pessoa fica na tela preta pra sempre)
+        getMessage: recuperarMensagem,
+        // evita rebuscar a lista inteira de participantes a cada envio: em grupo
+        // grande essa consulta é pesada e, se demorar demais, a lib desiste dela
+        // em silêncio e alguns aparelhos ficam de fora da entrega.
+        cachedGroupMetadata: async (jid) => metadadosCache.get(jid)?.dados,
         printQRInTerminal: false,
         browser: ["Ubuntu", "Chrome", "20.0.04"],
         markOnlineOnConnect: true,
@@ -441,6 +553,13 @@ async function startSock() {
 
     latestStatus.registered = !!state.creds.registered;
     sock.ev.on('creds.update', saveCreds);
+
+    // qualquer mudança na composição do grupo derruba o cache — assim o próximo
+    // envio busca a lista de participantes atualizada.
+    sock.ev.on('groups.update', (updates) => {
+        for (const g of updates) if (g?.id) invalidarMetadados(g.id);
+    });
+    sock.ev.on('group-participants.update', ({ id }) => { if (id) invalidarMetadados(id); });
 
     sock.ev.on('connection.update', (update) => {
         const { connection, lastDisconnect } = update;
@@ -505,6 +624,7 @@ async function infoDoGrupo(id) {
     try {
         const full = await sock.groupMetadata(id);
         console.log(`🔍 ${id} → announce=${full.announce} restrict=${full.restrict}`);
+        guardarMetadados(id, full); // aproveita a consulta que a tela de grupos já faz
         return { announce: !!full.announce, souAdmin: souAdminNoGrupo(full.participants) };
     } catch (e) {
         console.log(`⚠️  groupMetadata falhou pra ${id}: ${e.message}`);

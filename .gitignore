@@ -1,5 +1,6 @@
 node_modules/
 auth_info_baileys/
 legenda_status.txt
+mensagens_enviadas.json
 npm-debug.log*
 .env
