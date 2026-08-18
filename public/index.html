@@ -583,8 +583,14 @@ function handleStatus(m){
     connOpen = true;
     resolveWaiters('open', true);
     if($('.screen.active')?.id === 'connect') enterGroups();
-  } else if(m.connection === 'loggedOut' || m.connection === 'stuck'){
+  } else if(m.connection === 'loggedOut' || m.connection === 'stuck' || m.connection === 'replaced'){
     connOpen = false;
+    // fora da tela de conexão a pill não aparece, e o usuário ficaria olhando
+    // uma lista de grupos que não posta mais nada sem entender por quê
+    if(m.connection === 'replaced'){
+      $('#connSub').textContent = 'Sessão assumida por outra janela';
+      toast('Outra janela assumiu a sessão — feche a outra e reinicie o bot');
+    }
   }
   updateConnPill(m.connection);
   if(m.version){
@@ -600,6 +606,7 @@ function updateConnPill(conn){
   else if(conn === 'off'){ dot.className = 'dot off'; txt.textContent = 'Servidor offline'; }
   else if(conn === 'loggedOut'){ dot.className = 'dot off'; txt.textContent = 'Desconectado — gere novo código'; }
   else if(conn === 'stuck'){ dot.className = 'dot off'; txt.textContent = 'Conexão travada — use "Limpar dados salvos" abaixo'; }
+  else if(conn === 'replaced'){ dot.className = 'dot off'; txt.textContent = 'Outra janela assumiu a sessão — feche-a e reinicie o bot'; }
   else { dot.className = 'dot wait'; txt.textContent = 'Aguardando confirmação…'; }
 }
 

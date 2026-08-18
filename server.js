@@ -515,8 +515,32 @@ setInterval(() => {
 let sock = null;
 let latestStatus = { connection: 'connecting', registered: false };
 let tentativasReconexao = 0;
+// duas chamadas de startSock() ao mesmo tempo (ex.: o timer de reconexão
+// disparando enquanto alguém pede um código de pareamento) criavam dois
+// sockets vivos com a MESMA sessão — e o WhatsApp derruba um com "replaced".
+// Ou seja: o bot conseguia entrar em conflito sozinho, sem segunda instância.
+let conectando = false;
 
 async function startSock() {
+    if (conectando) return;
+    conectando = true;
+    try {
+        await abrirSocket();
+    } finally {
+        conectando = false;
+    }
+}
+
+async function abrirSocket() {
+    // encerra o socket anterior antes de abrir outro. Os listeners saem
+    // primeiro: sem isso, o end() dispara um 'close' no socket velho e o
+    // handler de lá agenda mais uma reconexão, multiplicando os sockets.
+    if (sock) {
+        try { sock.ev.removeAllListeners(); } catch {}
+        try { sock.end?.(new Error('reconectando')); } catch {}
+        sock = null;
+    }
+
     if (!makeWASocket) {
         const baileys = await import('@neoxr/baileys');
         makeWASocket = baileys.default || baileys.makeWASocket;
@@ -578,6 +602,20 @@ async function startSock() {
                 broadcast({ type: 'status', connection: 'loggedOut', registered: false });
                 return;
             }
+
+            // 440 = outra conexão assumiu esta sessão. Reconectar aqui é
+            // ativamente nocivo: a nossa reconexão derruba a outra ponta, que
+            // reconecta e derruba a nossa, sem fim. E o limite de 8 tentativas
+            // não segura o loop, porque cada reconexão dá certo e zera o
+            // contador ali em cima — foi exatamente o ping-pong de
+            // "🚀 Conectado / 🔌 Desconectado (connectionReplaced)" a cada ~6s.
+            // Quem chegou por último fica com a sessão; nós paramos e avisamos.
+            if (statusCode === DisconnectReason.connectionReplaced) {
+                console.log('⚠️  Outra conexão assumiu esta sessão do WhatsApp (outro "npm start" aberto, ou o WhatsApp Web em outra aba). Parei de reconectar pra não ficar num ping-pong sem fim — feche a outra e reinicie este.');
+                broadcast({ type: 'status', connection: 'replaced', registered: false });
+                return;
+            }
+
             tentativasReconexao++;
             if (tentativasReconexao > 8) {
                 console.log('⚠️  Muitas reconexões seguidas — parei de tentar sozinho pra não ficar em loop infinito. Use "Limpar dados salvos" e pareie de novo.');
@@ -1027,10 +1065,32 @@ wss.on('connection', (ws) => {
     });
 });
 
+// Só conecta no WhatsApp depois que a porta foi reservada com sucesso. Antes,
+// startSock() rodava solto aqui embaixo: um segundo "npm start" não conseguia
+// a porta, mas o erro caía no uncaughtException lá do topo ("Erro ignorado"),
+// o processo seguia vivo e conectava no WhatsApp assim mesmo. Resultado: duas
+// instâncias disputando a mesma sessão pra sempre. Amarrando a conexão ao
+// listen, a segunda morre antes de encostar no WhatsApp.
+// O handler vai nos dois: o ws re-emite os erros do servidor HTTP no
+// WebSocketServer (ws/lib/websocket-server.js:127) e registra esse listener
+// antes deste. Sem dono no wss, o EADDRINUSE virava 'error' não tratado e
+// estourava como uncaughtException — que o handler lá do topo engolia como
+// "Erro ignorado", e era assim que o processo zumbi sobrevivia.
+function falhaNoServidor(e) {
+    if (e.code === 'EADDRINUSE') {
+        console.log(`\n❌ A porta ${PORT} já está em uso — o bot provavelmente já está aberto em outro terminal.`);
+        console.log(`   Use aquele que já está rodando, ou rode numa porta diferente: PORT=3001 npm start\n`);
+        process.exit(1);
+    }
+    console.error('Erro no servidor:', e.message);
+    process.exit(1);
+}
+server.on('error', falhaNoServidor);
+wss.on('error', falhaNoServidor);
+
 server.listen(PORT, () => {
     console.log(`\n🌐 Bot de status rodando. Abra no navegador: http://localhost:${PORT}\n`);
+    startSock();
+    verificarAtualizacaoEmBackground();
+    setInterval(verificarAtualizacaoEmBackground, INTERVALO_CHECAGEM);
 });
-
-startSock();
-verificarAtualizacaoEmBackground();
-setInterval(verificarAtualizacaoEmBackground, INTERVALO_CHECAGEM);
