@@ -926,6 +926,47 @@ app.get('/youtube-search', async (req, res) => {
     }
 });
 
+// O YouTube quebra de tempos em tempos o "player client" que o yt-dlp usa por
+// padrão: a extração continua funcionando (título, duração aparecem normal),
+// mas a URL da mídia devolve "HTTP Error 403: Forbidden" na hora de baixar —
+// por isso a busca funciona e só o download quebra. Qual cliente funciona muda
+// a cada mudança deles, então em vez de fixar um, tentamos uma lista em ordem:
+// primeiro os que funcionam hoje e, por último, o padrão do yt-dlp (sem
+// --extractor-args), que volta a ser a melhor opção assim que o usuário
+// atualiza o yt-dlp e o upstream conserta.
+const CLIENTES_YOUTUBE = ['web_safari,mweb', null];
+
+// Só troca de cliente se o erro for do tipo que trocar resolve. Vídeo privado,
+// removido ou sem internet falha igual em todos — repetir só faria o usuário
+// esperar 3x mais pela mesma mensagem.
+const ehErroDeCliente = (msg) => /\b403\b|Forbidden|Requested format is not available|needs to be reloaded|Sign in to confirm|player response|nsig|Failed to extract/i.test(msg);
+
+async function executarYtDlp(ytDlp, args, opts = {}, limparAntesDeRepetir) {
+    let ultimoErro;
+    for (const cliente of CLIENTES_YOUTUBE) {
+        const extra = cliente ? ['--extractor-args', `youtube:player_client=${cliente}`] : [];
+        try {
+            return await executar(ytDlp, [...extra, ...args], opts);
+        } catch (e) {
+            ultimoErro = e;
+            if (!ehErroDeCliente(e.message)) throw e;
+            console.log(`⚠️  yt-dlp falhou com player_client=${cliente || 'padrão'}: ${e.message}`);
+            limparAntesDeRepetir && limparAntesDeRepetir();
+        }
+    }
+    throw new Error(`${ultimoErro.message} — parece que o YouTube mudou de novo. Atualize o yt-dlp ("yt-dlp -U", ou "pip install -U yt-dlp" no Termux) e tente outra vez.`);
+}
+
+// tentativa que falhou pode deixar pra trás .part, .mp4 e afins com o mesmo
+// nome-base; sem limpar, o yt-dlp da próxima tentativa acha que já baixou.
+function limparParciais(id) {
+    try {
+        for (const f of fs.readdirSync(UPLOAD_DIR)) {
+            if (f.startsWith(id + '.')) fs.unlinkSync(path.join(UPLOAD_DIR, f));
+        }
+    } catch {}
+}
+
 app.get('/youtube-download', async (req, res) => {
     const videoId = String(req.query.id || '');
     if (!idYoutubeValido(videoId)) return res.status(400).json({ error: 'Vídeo inválido.' });
@@ -935,19 +976,19 @@ app.get('/youtube-download', async (req, res) => {
         const url = youtubeUrl(videoId);
         // --print evita baixar o --dump-single-json inteiro (formatos, storyboards
         // etc — dezenas de KB) só pra ler a duração.
-        const rawDuration = await executar(ytDlp, ['--no-playlist', '--no-warnings', '--print', '%(duration)s', url]);
+        const rawDuration = await executarYtDlp(ytDlp, ['--no-playlist', '--no-warnings', '--print', '%(duration)s', url]);
         const duration = Number(rawDuration) || 0;
         if (!duration) throw new Error('Não consegui identificar a duração desse vídeo.');
         if (duration > MAX_DURACAO_YOUTUBE) throw new Error('Escolha um vídeo de até 12 minutos.');
         const id = crypto.randomBytes(8).toString('hex');
         const base = path.join(UPLOAD_DIR, id);
         const ffmpegAbs = resolverFfmpegAbsoluto();
-        await executar(ytDlp, [
+        await executarYtDlp(ytDlp, [
             '--no-playlist', '--no-warnings', '-x', '--audio-format', 'mp3',
             '--audio-quality', '5',
             ...(ffmpegAbs ? ['--ffmpeg-location', ffmpegAbs] : []),
             '-o', `${base}.%(ext)s`, url
-        ], { timeout: 180000 });
+        ], { timeout: 180000 }, () => limparParciais(id));
         const fp = `${base}.mp3`;
         if (!fs.existsSync(fp)) throw new Error('O áudio não foi gerado.');
         uploads.set(id, fp);
