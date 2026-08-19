@@ -83,6 +83,27 @@ function resolverYtDlp() {
     return resolverBin('yt-dlp', nomes, '--version');
 }
 
+// O yt-dlp novo resolve os "JS challenges" do YouTube dentro de um runtime
+// JavaScript, e só habilita o deno por padrão — que não existe no Termux (o
+// deno não publica build pra Android). Sem runtime a extração ainda responde
+// (busca e duração funcionam normal), mas a URL da mídia vem sem assinatura
+// válida e o download morre em "HTTP Error 403: Forbidden". Era exatamente a
+// diferença entre "no meu PC funciona" e o erro no celular.
+// Como este projeto já roda em Node, apontamos o próprio binário do servidor
+// como runtime: resolve no Termux sem pedir nenhuma instalação a mais.
+// A flag é recente — em yt-dlp antigo ela não existe e passá-la quebraria tudo
+// com "no such option", então checamos o --help antes (uma vez só, cacheado).
+let _argsJs;
+function argsRuntimeJs(ytDlp) {
+    if (_argsJs !== undefined) return _argsJs;
+    let suporta = false;
+    try {
+        suporta = execSync(`"${ytDlp}" --help`, { encoding: 'utf8', env: ffmpegEnv() }).includes('--js-runtimes');
+    } catch {}
+    if (!suporta) console.log('⚠️  yt-dlp sem suporte a --js-runtimes (versão antiga) — se o download der 403, é isso.');
+    return (_argsJs = suporta ? ['--js-runtimes', `node:${process.execPath}`] : []);
+}
+
 // yt-dlp NÃO faz busca em PATH pro valor de --ffmpeg-location (diferente do
 // resto do código, que usa spawn/execSync com resolução do próprio SO) — se
 // receber só "ffmpeg" (nome sem caminho) ele erra "ffprobe and ffmpeg not
@@ -980,11 +1001,12 @@ const CLIENTES_YOUTUBE = ['web_safari,mweb', null];
 const ehErroDeCliente = (msg) => /\b403\b|Forbidden|Requested format is not available|needs to be reloaded|Sign in to confirm|player response|nsig|Failed to extract/i.test(msg);
 
 async function executarYtDlp(ytDlp, args, opts = {}, limparAntesDeRepetir) {
+    const js = argsRuntimeJs(ytDlp);
     let ultimoErro;
     for (const cliente of CLIENTES_YOUTUBE) {
         const extra = cliente ? ['--extractor-args', `youtube:player_client=${cliente}`] : [];
         try {
-            return await executar(ytDlp, [...extra, ...args], opts);
+            return await executar(ytDlp, [...js, ...extra, ...args], opts);
         } catch (e) {
             ultimoErro = e;
             if (!ehErroDeCliente(e.message)) throw e;
@@ -992,7 +1014,10 @@ async function executarYtDlp(ytDlp, args, opts = {}, limparAntesDeRepetir) {
             limparAntesDeRepetir && limparAntesDeRepetir();
         }
     }
-    throw new Error(`${ultimoErro.message} — parece que o YouTube mudou de novo. Atualize o yt-dlp ("yt-dlp -U", ou "pip install -U yt-dlp" no Termux) e tente outra vez.`);
+    const dica = js.length
+        ? 'parece que o YouTube mudou de novo. Atualize o yt-dlp ("yt-dlp -U", ou "pip install -U yt-dlp" no Termux) e tente outra vez.'
+        : 'seu yt-dlp está antigo demais — o YouTube passou a exigir um runtime JavaScript e essa versão não sabe usar um. Atualize com "pip install -U yt-dlp" (Termux) ou "yt-dlp -U" (PC).';
+    throw new Error(`${ultimoErro.message} — ${dica}`);
 }
 
 // tentativa que falhou pode deixar pra trás .part, .mp4 e afins com o mesmo
