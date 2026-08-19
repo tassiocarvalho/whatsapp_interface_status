@@ -93,15 +93,30 @@ function resolverYtDlp() {
 // como runtime: resolve no Termux sem pedir nenhuma instalação a mais.
 // A flag é recente — em yt-dlp antigo ela não existe e passá-la quebraria tudo
 // com "no such option", então checamos o --help antes (uma vez só, cacheado).
-let _argsJs;
-function argsRuntimeJs(ytDlp) {
-    if (_argsJs !== undefined) return _argsJs;
-    let suporta = false;
-    try {
-        suporta = execSync(`"${ytDlp}" --help`, { encoding: 'utf8', env: ffmpegEnv() }).includes('--js-runtimes');
-    } catch {}
-    if (!suporta) console.log('⚠️  yt-dlp sem suporte a --js-runtimes (versão antiga) — se o download der 403, é isso.');
-    return (_argsJs = suporta ? ['--js-runtimes', `node:${process.execPath}`] : []);
+// O "resumo" acompanha toda mensagem de erro de YouTube: sem ele, quem instalou
+// o bot só consegue relatar "deu 403" e não dá pra saber se o problema é versão
+// antiga, runtime ausente ou o YouTube tendo mudado de novo.
+let _infoYtDlp;
+function infoYtDlp(ytDlp) {
+    if (_infoYtDlp) return _infoYtDlp;
+    const roda = (args) => {
+        try { return execSync(`"${ytDlp}" ${args}`, { encoding: 'utf8', env: ffmpegEnv() }); }
+        catch { return ''; }
+    };
+    const versao = roda('--version').trim() || 'desconhecida';
+    const suportaJs = roda('--help').includes('--js-runtimes');
+    _infoYtDlp = {
+        versao,
+        suportaJs,
+        args: suportaJs ? ['--js-runtimes', `node:${process.execPath}`] : [],
+        resumo: `yt-dlp ${versao} · node ${process.versions.node} · runtime JS: ${suportaJs ? 'node' : 'INDISPONÍVEL'}`
+    };
+    console.log(`🎬 ${_infoYtDlp.resumo}`);
+    if (!suportaJs) {
+        console.log('⚠️  Esse yt-dlp é antigo demais pro YouTube de hoje (não tem --js-runtimes).');
+        console.log('   Atualize com: pip install -U yt-dlp   (Termux)  ·  yt-dlp -U   (PC)');
+    }
+    return _infoYtDlp;
 }
 
 // yt-dlp NÃO faz busca em PATH pro valor de --ffmpeg-location (diferente do
@@ -134,8 +149,15 @@ function executar(bin, args, { timeout = 120000 } = {}) {
         proc.on('error', e => { clearTimeout(timer); reject(e); });
         proc.on('close', code => {
             clearTimeout(timer);
-            if (code === 0) resolve(stdout.trim());
-            else reject(new Error(stderr.trim().split('\n').slice(-3).join(' ') || `yt-dlp terminou com código ${code}`));
+            if (code === 0) return resolve(stdout.trim());
+            // O aviso de runtime JS ausente sai lá no começo do log, bem longe do
+            // ERROR do final — pegar só as últimas linhas jogava fora justamente
+            // a causa raiz e deixava o usuário com um "403 Forbidden" sem pista.
+            const linhas = stderr.trim().split('\n').map(l => l.trim()).filter(Boolean);
+            const causaRaiz = linhas.filter(l => /No supported JavaScript runtime|Skipping unsupported client/i.test(l));
+            const erros = linhas.filter(l => /^ERROR/i.test(l));
+            const msg = [...causaRaiz, ...(erros.length ? erros : linhas.slice(-3))].join(' ');
+            reject(new Error(msg || `yt-dlp terminou com código ${code}`));
         });
     });
 }
@@ -1001,12 +1023,12 @@ const CLIENTES_YOUTUBE = ['web_safari,mweb', null];
 const ehErroDeCliente = (msg) => /\b403\b|Forbidden|Requested format is not available|needs to be reloaded|Sign in to confirm|player response|nsig|Failed to extract/i.test(msg);
 
 async function executarYtDlp(ytDlp, args, opts = {}, limparAntesDeRepetir) {
-    const js = argsRuntimeJs(ytDlp);
+    const yt = infoYtDlp(ytDlp);
     let ultimoErro;
     for (const cliente of CLIENTES_YOUTUBE) {
         const extra = cliente ? ['--extractor-args', `youtube:player_client=${cliente}`] : [];
         try {
-            return await executar(ytDlp, [...js, ...extra, ...args], opts);
+            return await executar(ytDlp, [...yt.args, ...extra, ...args], opts);
         } catch (e) {
             ultimoErro = e;
             if (!ehErroDeCliente(e.message)) throw e;
@@ -1014,10 +1036,10 @@ async function executarYtDlp(ytDlp, args, opts = {}, limparAntesDeRepetir) {
             limparAntesDeRepetir && limparAntesDeRepetir();
         }
     }
-    const dica = js.length
+    const dica = yt.suportaJs
         ? 'parece que o YouTube mudou de novo. Atualize o yt-dlp ("yt-dlp -U", ou "pip install -U yt-dlp" no Termux) e tente outra vez.'
         : 'seu yt-dlp está antigo demais — o YouTube passou a exigir um runtime JavaScript e essa versão não sabe usar um. Atualize com "pip install -U yt-dlp" (Termux) ou "yt-dlp -U" (PC).';
-    throw new Error(`${ultimoErro.message} — ${dica}`);
+    throw new Error(`${ultimoErro.message} — ${dica} [${yt.resumo}]`);
 }
 
 // tentativa que falhou pode deixar pra trás .part, .mp4 e afins com o mesmo
@@ -1039,7 +1061,7 @@ app.get('/youtube-download', async (req, res) => {
         const url = youtubeUrl(videoId);
         // --print evita baixar o --dump-single-json inteiro (formatos, storyboards
         // etc — dezenas de KB) só pra ler a duração.
-        const rawDuration = await executarYtDlp(ytDlp, ['--no-playlist', '--no-warnings', '--print', '%(duration)s', url]);
+        const rawDuration = await executarYtDlp(ytDlp, ['--no-playlist', '--print', '%(duration)s', url]);
         const duration = Number(rawDuration) || 0;
         if (!duration) throw new Error('Não consegui identificar a duração desse vídeo.');
         if (duration > MAX_DURACAO_YOUTUBE) throw new Error('Escolha um vídeo de até 12 minutos.');
@@ -1047,7 +1069,7 @@ app.get('/youtube-download', async (req, res) => {
         const base = path.join(UPLOAD_DIR, id);
         const ffmpegAbs = resolverFfmpegAbsoluto();
         await executarYtDlp(ytDlp, [
-            '--no-playlist', '--no-warnings', '-x', '--audio-format', 'mp3',
+            '--no-playlist', '-x', '--audio-format', 'mp3',
             '--audio-quality', '5',
             ...(ffmpegAbs ? ['--ffmpeg-location', ffmpegAbs] : []),
             '-o', `${base}.%(ext)s`, url
@@ -1113,8 +1135,19 @@ function falhaNoServidor(e) {
 server.on('error', falhaNoServidor);
 wss.on('error', falhaNoServidor);
 
+// imprime no arranque o que a música do YouTube precisa. É o print que a gente
+// pede quando alguém relata "deu 403" — resolve na primeira mensagem em vez de
+// virar ida e volta perguntando versão de yt-dlp, node e ffmpeg.
+function diagnosticoMidia() {
+    const ytDlp = resolverYtDlp();
+    if (ytDlp) infoYtDlp(ytDlp);
+    else console.log('⚠️  yt-dlp não encontrado — música do YouTube indisponível (rode o script de instalação).');
+    if (!resolverFfmpeg()) console.log('⚠️  ffmpeg não encontrado — a mídia vai sem conversão.');
+}
+
 server.listen(PORT, () => {
     console.log(`\n🌐 Bot de status rodando. Abra no navegador: http://localhost:${PORT}\n`);
+    diagnosticoMidia();
     startSock();
     verificarAtualizacaoEmBackground();
     setInterval(verificarAtualizacaoEmBackground, INTERVALO_CHECAGEM);
